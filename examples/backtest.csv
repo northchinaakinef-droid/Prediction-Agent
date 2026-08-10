@@ -1,0 +1,5 @@
+event_id,decision_at,start_at,model_probability,decimal_odds,won,confidence
+demo-1,2025-01-01T10:00:00Z,2025-01-01T12:00:00Z,0.62,1.95,true,0.80
+demo-2,2025-01-02T10:00:00Z,2025-01-02T12:00:00Z,0.58,2.05,false,0.75
+demo-3,2025-01-03T10:00:00Z,2025-01-03T12:00:00Z,0.52,1.90,true,0.70
+

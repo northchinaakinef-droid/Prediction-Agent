@@ -1,0 +1,58 @@
+# Prediction Agent
+
+面向 NBA、CBA、LoL、CS2 的赛事研究与风险控制骨架。它汇总概率、盘口、流动性和证据，输出 `BET` 或 `NO_BET`，但不承诺收益，也不会自动下单。
+
+## 已实现
+
+- Polymarket Gamma/CLOB/Data 公共读接口：市场、midpoint、order book、holders。
+- The Odds API 适配器：当前与历史赔率快照（需要 API key）。
+- 异常检测：价格跳变、点差突然扩大、订单簿失衡。
+- 下注规模：模型概率向市场概率收缩，1/4 Kelly，默认单笔本金上限 1%。
+- 时间顺序回测：拒绝开赛后决策，报告 ROI、最大回撤、Brier 分数及 bootstrap 95% ROI 区间。
+
+## 快速运行
+
+无需安装依赖：
+
+```powershell
+$env:PYTHONPATH="src"
+python -m prediction_agent.cli recommend nba-demo home 0.62 1.95 --confidence 0.8 --bankroll 1000
+python -m prediction_agent.cli backtest examples/backtest.csv
+python -m unittest discover -s tests
+```
+
+联网查询 Polymarket：
+
+```powershell
+$env:PYTHONPATH="src"
+python -m prediction_agent.cli polymarket NBA --limit 500
+```
+
+## 生产数据架构
+
+1. 每 5–30 秒保存原始盘口快照，禁止只保存收盘价。
+2. NBA 官方数据从 NBA.com/Stats 获取；伤病与首发必须记录发布时间和来源。
+3. NBA 博彩盘由至少两个独立聚合源交叉检查。CBA、LoL、CS2 应签约有明确覆盖和历史快照的数据商。
+4. 新闻/报告进入事件证据表，只允许使用 `published_at <= decision_at` 的内容。
+5. 预测按联赛分模：NBA（球员可用性、休息、赛程、阵容）、CBA（外援/注册/赛程）、LoL（版本、首发、阵容、地图侧）、CS2（地图池、阵容、LAN/线上、赛制）。
+6. 推荐层以去水后的市场概率为基准，只在校准后概率的净优势覆盖手续费、滑点和模型误差时下注。
+
+## 回测验收标准
+
+不要用“历史 ROI ≥60%”作为唯一验收条件。如此高的 ROI 往往来自样本过小、赔率时点错误、挑选偏差或泄漏。建议同时要求：
+
+- 严格 walk-forward，训练/验证/测试按时间隔离；最后赛季完全锁箱。
+- 至少 500 笔独立下注，并按联赛、赛季、赔率区间报告。
+- ROI 的 95% 置信区间下界大于 0，而不是只看点估计。
+- 概率校准（Brier/reliability）、CLV、最大回撤、成交率和容量均达标。
+- 计入 vig、Polymarket fee、滑点、盘口延迟、限额和无法成交。
+- 参数冻结后纸上交易 8–12 周，再考虑极小资金实盘。
+
+## 下一阶段
+
+- 建立 SQLite/PostgreSQL 快照库和定时采集器。
+- 增加 NBA 官方统计、伤病、新闻及第二赔率商的实际凭证。
+- 实现赛事实体对齐（同队异名、时区、Bo3/Bo5、让分/地图盘）。
+- 加入按日总风险 3%、相关性暴露、连续亏损熔断和账户级回撤熔断。
+- 提供只读日报/API；交易执行必须独立审批，不与预测进程共享私钥。
+
