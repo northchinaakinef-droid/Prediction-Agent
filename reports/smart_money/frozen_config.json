@@ -1,0 +1,137 @@
+{
+  "created_at": "2026-08-10T15:56:43.024812+00:00",
+  "configs": {
+    "nba": {
+      "name": "market",
+      "features": [
+        "market_logit"
+      ],
+      "ridge": 0.1,
+      "weights": [
+        -0.25147877003041236,
+        0.8090677106458063
+      ],
+      "mu": [
+        -0.24357347078188224
+      ],
+      "sd": [
+        0.9740889462976341
+      ],
+      "edge_threshold": 0.03,
+      "train_end_ts": 1769828400,
+      "validation_end_ts": 1774134000,
+      "validation_positive": false
+    },
+    "cba": {
+      "name": "market_smart",
+      "features": [
+        "market_logit",
+        "smart_flow"
+      ],
+      "ridge": 0.1,
+      "weights": [
+        0.8668715987190221,
+        1.0294590918271216,
+        -0.25342701037808446
+      ],
+      "mu": [
+        0.44018455624967884,
+        0.011049723756906077
+      ],
+      "sd": [
+        1.5389108104675895,
+        0.29711225767400595
+      ],
+      "edge_threshold": 0.03,
+      "train_end_ts": 1774440000,
+      "validation_end_ts": 1776252900,
+      "validation_positive": false
+    },
+    "lol": {
+      "name": "market_smart",
+      "features": [
+        "market_logit",
+        "smart_flow"
+      ],
+      "ridge": 0.1,
+      "weights": [
+        0.19649414067671425,
+        0.765894073560161,
+        0.11443097939102631
+      ],
+      "mu": [
+        0.13172697056548854,
+        -0.005861115349869736
+      ],
+      "sd": [
+        1.1304917287557867,
+        0.6680369807297274
+      ],
+      "edge_threshold": 0.05,
+      "train_end_ts": 1775901600,
+      "validation_end_ts": 1778364000,
+      "validation_positive": false
+    }
+  },
+  "validation": {
+    "nba": {
+      "probability": {
+        "brier": 0.1785996936115602,
+        "log_loss": 0.5372166735547226
+      },
+      "trading": {
+        "bets": 146,
+        "wins": 22,
+        "hit_rate": 0.1506849315068493,
+        "turnover": 884.2189338511834,
+        "profit": -314.82562337126853,
+        "roi": -0.35604940283291264,
+        "bankroll_return": -0.3148256233712682,
+        "max_drawdown": 0.3277496964123837,
+        "annualized_return": -0.9397443058283724,
+        "calmar": -2.867262170232372
+      },
+      "candidates": 12
+    },
+    "cba": {
+      "probability": {
+        "brier": 0.16089112308151166,
+        "log_loss": 0.48986439304017754
+      },
+      "trading": {
+        "bets": 61,
+        "wins": 32,
+        "hit_rate": 0.5245901639344263,
+        "turnover": 445.35375438063903,
+        "profit": -39.282134686244675,
+        "roi": -0.08820434160451841,
+        "bankroll_return": -0.03928213468624464,
+        "max_drawdown": 0.055944865472933314,
+        "annualized_return": -0.5187457590951058,
+        "calmar": -9.272446268479815
+      },
+      "candidates": 12
+    },
+    "lol": {
+      "probability": {
+        "brier": 0.17912284401481757,
+        "log_loss": 0.5368740840843721
+      },
+      "trading": {
+        "bets": 86,
+        "wins": 21,
+        "hit_rate": 0.2441860465116279,
+        "turnover": 605.2776575864068,
+        "profit": -132.23369098523327,
+        "roi": -0.21846782105344134,
+        "bankroll_return": -0.1322336909852332,
+        "max_drawdown": 0.16323308983814733,
+        "annualized_return": -0.8379747844755581,
+        "calmar": -5.133608542890699
+      },
+      "candidates": 12
+    }
+  },
+  "data_hash": "42d452aac6e61d98e56b31153e0f6e610db7d8b720357e450c662dde0cc0ce7b",
+  "test_policy": "final 20%, execute exactly once with finalize"
+}
