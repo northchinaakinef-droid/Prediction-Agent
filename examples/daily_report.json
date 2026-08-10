@@ -1,0 +1,17 @@
+{
+  "recommendations": [
+    {
+      "sport": "nba",
+      "event": "客队 @ 主队",
+      "event_id": "demo-1",
+      "outcome": "主队 Moneyline",
+      "action": "BET",
+      "model_probability": 0.5986,
+      "market_probability": 0.5128,
+      "edge": 0.0858,
+      "stake": 10.0,
+      "reasons": ["模型已按不确定性收缩", "单笔风险不超过本金 0.75%"]
+    }
+  ],
+  "risk_notes": ["示例数据，不可用于真实下注", "盘口异常时暂停执行"]
+}

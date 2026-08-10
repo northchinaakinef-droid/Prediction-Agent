@@ -7,8 +7,9 @@
 - Polymarket Gamma/CLOB/Data 公共读接口：市场、midpoint、order book、holders。
 - The Odds API 适配器：当前与历史赔率快照（需要 API key）。
 - 异常检测：价格跳变、点差突然扩大、订单簿失衡。
-- 下注规模：模型概率向市场概率收缩，1/4 Kelly，默认单笔本金上限 1%。
+- 下注规模：模型概率向市场概率收缩，1/4 Kelly；当前风控为单笔 0.75%、单日 2.5%、同一赛事 1%、累计回撤 10% 熔断。
 - 时间顺序回测：拒绝开赛后决策，报告 ROI、最大回撤、Brier 分数及 bootstrap 95% ROI 区间。
+- 飞书推送：支持群自定义机器人 Webhook，或自建应用机器人直接推送个人账号。
 
 ## 快速运行
 
@@ -20,6 +21,22 @@ python -m prediction_agent.cli recommend nba-demo home 0.62 1.95 --confidence 0.
 python -m prediction_agent.cli backtest examples/backtest.csv
 python -m unittest discover -s tests
 ```
+
+## 飞书手机推送
+
+最简单的方式是在一个只有你自己的飞书群中添加“自定义机器人”，把 Webhook 和可选签名密钥放入环境变量：
+
+```powershell
+$env:FEISHU_WEBHOOK_URL="https://open.feishu.cn/open-apis/bot/v2/hook/你的值"
+$env:FEISHU_WEBHOOK_SECRET="你的签名密钥"
+$env:PYTHONPATH="src"
+python -m prediction_agent.cli notify examples/daily_report.json --dry-run
+python -m prediction_agent.cli notify examples/daily_report.json
+```
+
+若需要机器人直接私聊你的手机账户，创建飞书自建应用、开启机器人能力及 `im:message:send_as_bot` 权限，然后设置 `FEISHU_APP_ID`、`FEISHU_APP_SECRET`、`FEISHU_RECEIVE_ID`。应用机器人必须覆盖目标用户。手机是否弹出系统通知仍取决于飞书客户端和手机的通知设置。
+
+定时运行建议由 Windows Task Scheduler 在每天固定时间启动完整分析流程，只有分析成功且报告 JSON 校验通过后才执行 `notify`。不要把 Webhook、App Secret 或钱包私钥写进任务参数、源码或 Git。
 
 联网查询 Polymarket：
 
@@ -55,4 +72,3 @@ python -m prediction_agent.cli polymarket NBA --limit 500
 - 实现赛事实体对齐（同队异名、时区、Bo3/Bo5、让分/地图盘）。
 - 加入按日总风险 3%、相关性暴露、连续亏损熔断和账户级回撤熔断。
 - 提供只读日报/API；交易执行必须独立审批，不与预测进程共享私钥。
-

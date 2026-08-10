@@ -5,4 +5,4 @@ __pycache__/
 .env
 data/raw/
 data/cache/
-
+data/daily/

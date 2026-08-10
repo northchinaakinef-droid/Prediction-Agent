@@ -35,7 +35,7 @@ def recommend(
     bankroll: float,
     confidence: float,
     kelly_scale: float = 0.25,
-    max_bet_fraction: float = 0.01,
+    max_bet_fraction: float = 0.0075,
     min_edge: float = 0.025,
     min_confidence: float = 0.60,
 ) -> Recommendation:
@@ -71,4 +71,3 @@ def recommend(
         confidence=confidence,
         reasons=tuple(reasons),
     )
-

@@ -4,8 +4,10 @@ import argparse
 import json
 import os
 from dataclasses import asdict
+from pathlib import Path
 
 from .backtest import load_csv, run_backtest
+from .delivery import FeishuAppClient, FeishuWebhookClient, format_daily_report
 from .providers.polymarket import PolymarketClient
 from .risk import recommend
 
@@ -26,6 +28,9 @@ def main() -> None:
     bt = sub.add_parser("backtest", help="backtest timestamped prediction rows")
     bt.add_argument("csv")
     bt.add_argument("--bankroll", type=float, default=1000)
+    notify = sub.add_parser("notify", help="send a prepared daily JSON report to Feishu")
+    notify.add_argument("report", help="JSON file containing recommendations")
+    notify.add_argument("--dry-run", action="store_true", help="print the exact message without sending")
     args = parser.parse_args()
     if args.command == "polymarket":
         rows = PolymarketClient().search_sports(args.query, limit=args.limit)
@@ -35,11 +40,30 @@ def main() -> None:
                            model_probability=args.model_probability, decimal_odds=args.decimal_odds,
                            bankroll=args.bankroll, confidence=args.confidence)
         print(json.dumps(asdict(result), ensure_ascii=False, indent=2, default=str))
-    else:
+    elif args.command == "backtest":
         report = run_backtest(load_csv(args.csv), initial_bankroll=args.bankroll)
         print(json.dumps(asdict(report), ensure_ascii=False, indent=2))
+    else:
+        report_data = json.loads(Path(args.report).read_text(encoding="utf-8"))
+        message = format_daily_report(report_data)
+        if args.dry_run:
+            print(message)
+            return
+        webhook = os.getenv("FEISHU_WEBHOOK_URL")
+        if webhook:
+            client = FeishuWebhookClient(webhook, os.getenv("FEISHU_WEBHOOK_SECRET") or None)
+        else:
+            required = ["FEISHU_APP_ID", "FEISHU_APP_SECRET", "FEISHU_RECEIVE_ID"]
+            missing = [name for name in required if not os.getenv(name)]
+            if missing:
+                parser.error("missing Feishu configuration: " + ", ".join(missing))
+            client = FeishuAppClient(
+                os.environ["FEISHU_APP_ID"], os.environ["FEISHU_APP_SECRET"],
+                os.environ["FEISHU_RECEIVE_ID"], os.getenv("FEISHU_RECEIVE_ID_TYPE", "open_id"),
+            )
+        result = client.send_text(message)
+        print(json.dumps({"sent": True, "parts": len(result)}, ensure_ascii=False))
 
 
 if __name__ == "__main__":
     main()
-
