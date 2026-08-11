@@ -8,6 +8,7 @@ from pathlib import Path
 
 from .backtest import load_csv, run_backtest
 from .delivery import FeishuAppClient, FeishuWebhookClient, format_daily_report
+from .next_model import DEFAULT_FEATURES, load_jsonl, walk_forward_evaluate
 from .providers.polymarket import PolymarketClient
 from .risk import recommend
 
@@ -25,9 +26,21 @@ def main() -> None:
     rec.add_argument("decimal_odds", type=float)
     rec.add_argument("--confidence", type=float, default=0.7)
     rec.add_argument("--bankroll", type=float, default=float(os.getenv("BANKROLL", "1000")))
+    rec.add_argument("--spread", type=float)
+    rec.add_argument("--available-size", type=float)
+    rec.add_argument("--estimated-cost", type=float, default=0.0)
+    rec.add_argument("--enable-trading", action="store_true")
     bt = sub.add_parser("backtest", help="backtest timestamped prediction rows")
     bt.add_argument("csv")
     bt.add_argument("--bankroll", type=float, default=1000)
+    nxt = sub.add_parser("next-evaluate", help="walk-forward a market-anchored league model")
+    nxt.add_argument("jsonl", help="timestamped next-model JSONL dataset")
+    nxt.add_argument("league", choices=sorted(DEFAULT_FEATURES))
+    nxt.add_argument("--features", help="comma-separated feature names; defaults are league-specific")
+    nxt.add_argument("--initial-train", type=int, default=120)
+    nxt.add_argument("--test-size", type=int, default=50)
+    nxt.add_argument("--min-edge", type=float, default=0.03)
+    nxt.add_argument("--output", help="optional JSON report path")
     notify = sub.add_parser("notify", help="send a prepared daily JSON report to Feishu")
     notify.add_argument("report", help="JSON file containing recommendations")
     notify.add_argument("--dry-run", action="store_true", help="print the exact message without sending")
@@ -38,11 +51,26 @@ def main() -> None:
     elif args.command == "recommend":
         result = recommend(event_id=args.event_id, outcome=args.outcome,
                            model_probability=args.model_probability, decimal_odds=args.decimal_odds,
-                           bankroll=args.bankroll, confidence=args.confidence)
+                           bankroll=args.bankroll, confidence=args.confidence,
+                           spread=args.spread, available_size=args.available_size,
+                           estimated_cost=args.estimated_cost,
+                           trading_enabled=args.enable_trading)
         print(json.dumps(asdict(result), ensure_ascii=False, indent=2, default=str))
     elif args.command == "backtest":
         report = run_backtest(load_csv(args.csv), initial_bankroll=args.bankroll)
-        print(json.dumps(asdict(report), ensure_ascii=False, indent=2))
+        print(json.dumps(report.as_dict(), ensure_ascii=False, indent=2))
+    elif args.command == "next-evaluate":
+        rows = [row for row in load_jsonl(args.jsonl) if row.league == args.league]
+        if not rows:
+            parser.error(f"no {args.league} rows in dataset")
+        names = tuple(name.strip() for name in args.features.split(",") if name.strip()) if args.features else None
+        report = walk_forward_evaluate(
+            rows, names, initial_train=args.initial_train, test_size=args.test_size, min_edge=args.min_edge,
+        )
+        payload = json.dumps(report.as_dict(), ensure_ascii=False, indent=2)
+        if args.output:
+            Path(args.output).write_text(payload, encoding="utf-8")
+        print(payload)
     else:
         report_data = json.loads(Path(args.report).read_text(encoding="utf-8"))
         message = format_daily_report(report_data)

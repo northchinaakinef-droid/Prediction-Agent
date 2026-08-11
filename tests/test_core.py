@@ -22,9 +22,24 @@ class CoreTests(unittest.TestCase):
 
     def test_stake_is_capped(self):
         result = recommend(event_id="x", outcome="home", model_probability=0.8,
-                           decimal_odds=2.0, bankroll=1000, confidence=0.9)
+                           decimal_odds=2.0, bankroll=1000, confidence=0.9,
+                           spread=0.01, available_size=1000, trading_enabled=True)
         self.assertEqual(result.action, "BET")
         self.assertLessEqual(result.stake, 7.5)
+
+    def test_explicit_no_trade_when_market_quality_is_missing(self):
+        result = recommend(event_id="x", outcome="yes", model_probability=0.8,
+                           decimal_odds=2.0, bankroll=1000, confidence=0.9,
+                           require_market_quality=True)
+        self.assertEqual(result.action, "NO_BET")
+        self.assertEqual(result.decision, "NO TRADE")
+        self.assertIn("spread/liquidity unavailable", result.reasons)
+
+    def test_explicit_buy_direction_when_trade_passes(self):
+        result = recommend(event_id="x", outcome="no", model_probability=0.8,
+                           decimal_odds=2.0, bankroll=1000, confidence=0.9,
+                           spread=0.01, available_size=1000, require_market_quality=True, trading_enabled=True)
+        self.assertEqual(result.decision, "BUY NO")
 
     def test_anomaly_detection(self):
         now = datetime.now(timezone.utc)
@@ -38,6 +53,19 @@ class CoreTests(unittest.TestCase):
         row = BacktestRow("x", now, now - timedelta(hours=1), .7, 2.0, True, .9)
         with self.assertRaisesRegex(ValueError, "look-ahead"):
             run_backtest([row])
+
+    def test_backtest_compares_model_to_market_and_reports_strata(self):
+        now = datetime.now(timezone.utc)
+        rows = [
+            BacktestRow("a", now, now + timedelta(hours=1), .90, 2.0, True, .9),
+            BacktestRow("b", now + timedelta(days=1), now + timedelta(days=1, hours=1), .55, 2.0, False, .9),
+        ]
+        report = run_backtest(rows)
+        self.assertEqual(report.samples, 2)
+        self.assertEqual(report.bets, 2)
+        self.assertLess(report.brier_score, report.market_brier_score)
+        self.assertEqual(len(report.edge_strata), 5)
+        self.assertEqual(len(report.entry_price_strata), 7)
 
     def test_feishu_signature_is_stable(self):
         self.assertEqual(webhook_signature(1700000000, "secret"), webhook_signature(1700000000, "secret"))

@@ -318,13 +318,28 @@ def trade_metrics(rows: list[dict[str, Any]], probs: np.ndarray, edge_threshold:
         peak = max(peak, bankroll)
         max_dd = max(max_dd, (peak - bankroll) / peak)
         curve.append({"ts": row["start_ts"], "bankroll": bankroll})
+    audit_records = []
+    for row, p_a in zip(rows, probs):
+        market_a = float(row["market_p"])
+        side = 0 if p_a - market_a >= edge_threshold else 1 if market_a - p_a >= edge_threshold else -1
+        raw = market_a if side == 0 else 1 - market_a if side == 1 else None
+        model_p = float(p_a) if side == 0 else 1 - float(p_a) if side == 1 else None
+        entry = min(0.99, raw + 0.01) if raw is not None else None
+        audit_records.append({
+            "event_id": row["event_id"], "start_ts": row["start_ts"], "outcome": int(row["y"]),
+            "model_probability_a": float(p_a), "market_probability_a": market_a, "side": side,
+            "decision": "NO TRADE" if side < 0 or model_p <= entry else ("BUY YES" if side == 0 else "BUY NO"),
+            "entry_ask": entry, "edge": model_p - entry if entry is not None else None,
+            "spread": None, "available_size": None,
+        })
     days = max(1.0, (rows[-1]["start_ts"] - rows[0]["start_ts"]) / 86400) if rows else 1
     annualized = (bankroll / 1000) ** (365 / days) - 1 if bankroll > 0 else -1.0
     return {
         "bets": bets, "wins": wins, "hit_rate": wins / bets if bets else None,
         "turnover": turnover, "profit": profit, "roi": profit / turnover if turnover else None,
         "bankroll_return": bankroll / 1000 - 1, "max_drawdown": max_dd,
-        "annualized_return": annualized, "calmar": annualized / max_dd if max_dd else None, "curve": curve,
+        "annualized_return": annualized, "calmar": annualized / max_dd if max_dd else None,
+        "curve": curve, "audit_records": audit_records,
     }
 
 
@@ -428,8 +443,10 @@ def finalize_once() -> None:
         probs = predict(test, config)
         y = np.asarray([r["y"] for r in test])
         tm = trade_metrics(test, probs, config["edge_threshold"])
+        market_probs = np.asarray([r["market_p"] for r in test])
         results[league] = {
             "samples": len(test), "probability": probability_metrics(y, probs),
+            "market_probability": probability_metrics(y, market_probs),
             "trading": tm, "calibration": calibration(y, probs),
             "confidence_strata": confidence_strata(y, probs), "deviation": deviation_stats(test, probs),
             "model": {k: config[k] for k in ["name", "features", "ridge", "edge_threshold", "validation_positive"]},

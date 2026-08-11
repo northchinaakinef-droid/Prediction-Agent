@@ -17,10 +17,20 @@
 
 ```powershell
 $env:PYTHONPATH="src"
-python -m prediction_agent.cli recommend nba-demo home 0.62 1.95 --confidence 0.8 --bankroll 1000
+python -m prediction_agent.cli recommend nba-demo yes 0.62 1.95 --confidence 0.8 --bankroll 1000 --spread 0.01 --available-size 500
 python -m prediction_agent.cli backtest examples/backtest.csv
+python -m prediction_agent.cli next-evaluate data/next_model.jsonl nba --output reports/nba_next_model.json
 python -m unittest discover -s tests
 ```
+
+## Next market-anchored model
+
+The next model uses the decision-time Polymarket probability as a log-odds offset and learns only incremental corrections from independent information such as injuries, lineups, rest, patches, map pools, and multi-book consensus. NBA, CBA, LoL, and CS2 are always trained separately.
+
+Input is JSONL. Every event requires `decision_at`, `start_at`, `settled_at`, market probability, result, and features carrying both `observed_at` and `source`. Features observed after the decision are rejected. See `examples/next_model_rows.jsonl`.
+
+`next-evaluate` runs an expanding walk-forward where each test fold can only use labels settled before that fold begins. Paper-trading approval requires at least 200 OOS predictions, 3 folds, better Brier and Log Loss than market, improvement in two-thirds of folds, 80% execution-price coverage, 100 costed trades, positive ROI, Profit Factor above 1.05, and maximum drawdown at or below 20%. It never disables the production `NO TRADE` default.
+
 
 ## 飞书手机推送
 

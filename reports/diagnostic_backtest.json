@@ -1,0 +1,615 @@
+{
+  "generated_at": "2026-08-11T11:41:44.741249+00:00",
+  "tuning_performed": false,
+  "leagues": [
+    {
+      "league": "nba",
+      "samples": 533,
+      "trades": 191,
+      "wins": 49,
+      "win_rate": 0.25654450261780104,
+      "model_direction_accuracy": 0.7392120075046904,
+      "market_direction_accuracy": 0.7317073170731707,
+      "average_entry_price": 0.2544188481675393,
+      "average_model_probability": 0.3283114516470976,
+      "average_edge": 0.07389260347955828,
+      "turnover": 1239.9915425909644,
+      "profit": -180.29569907105076,
+      "roi": -0.14540074901988653,
+      "frictionless_roi": -0.0830470156650771,
+      "cost_drag": 0.062353733354809426,
+      "max_drawdown": 0.2964607104350446,
+      "profit_factor": 0.8096164616537517,
+      "maximum_losing_streak": 22,
+      "model_brier": 0.17832484555686814,
+      "market_brier": 0.17291762851782363,
+      "brier_skill_vs_market": -0.031270478813484104,
+      "model_log_loss": 0.5349473421488908,
+      "market_log_loss": 0.5170135929451664,
+      "model_beats_market_probability": false,
+      "calibration": [
+        {
+          "range": "0.0-0.1",
+          "samples": 4,
+          "predicted": 0.08331161846362291,
+          "actual": 0.0
+        },
+        {
+          "range": "0.1-0.2",
+          "samples": 52,
+          "predicted": 0.1550327561958,
+          "actual": 0.11538461538461539
+        },
+        {
+          "range": "0.2-0.3",
+          "samples": 75,
+          "predicted": 0.2540836951949118,
+          "actual": 0.17333333333333334
+        },
+        {
+          "range": "0.3-0.4",
+          "samples": 88,
+          "predicted": 0.34623362722689593,
+          "actual": 0.23863636363636365
+        },
+        {
+          "range": "0.4-0.5",
+          "samples": 84,
+          "predicted": 0.4480321498635244,
+          "actual": 0.35714285714285715
+        },
+        {
+          "range": "0.5-0.6",
+          "samples": 85,
+          "predicted": 0.5514272926236362,
+          "actual": 0.5058823529411764
+        },
+        {
+          "range": "0.6-0.7",
+          "samples": 66,
+          "predicted": 0.6424038266907909,
+          "actual": 0.6666666666666666
+        },
+        {
+          "range": "0.7-0.8",
+          "samples": 41,
+          "predicted": 0.7533081618347846,
+          "actual": 0.9024390243902439
+        },
+        {
+          "range": "0.8-0.9",
+          "samples": 35,
+          "predicted": 0.8428393924889152,
+          "actual": 0.9714285714285714
+        },
+        {
+          "range": "0.9-1.0",
+          "samples": 3,
+          "predicted": 0.9133969275055999,
+          "actual": 1.0
+        }
+      ],
+      "edge_strata": [
+        {
+          "range": "<0%",
+          "samples": 0,
+          "win_rate": null,
+          "average_entry_price": null,
+          "roi": null,
+          "max_drawdown": 0.0,
+          "profit_factor": null
+        },
+        {
+          "range": "0%-2%",
+          "samples": 0,
+          "win_rate": null,
+          "average_entry_price": null,
+          "roi": null,
+          "max_drawdown": 0.0,
+          "profit_factor": null
+        },
+        {
+          "range": "2%-5%",
+          "samples": 36,
+          "win_rate": 0.3888888888888889,
+          "average_entry_price": 0.2709722222222222,
+          "roi": 0.36019117080394264,
+          "max_drawdown": 0.050070087145512594,
+          "profit_factor": 1.580106870797901
+        },
+        {
+          "range": "5%-10%",
+          "samples": 127,
+          "win_rate": 0.2204724409448819,
+          "average_entry_price": 0.25550393700787405,
+          "roi": -0.2905418111147036,
+          "max_drawdown": 0.32460794069897375,
+          "profit_factor": 0.6382169549790904
+        },
+        {
+          "range": ">=10%",
+          "samples": 28,
+          "win_rate": 0.25,
+          "average_entry_price": 0.22821428571428573,
+          "roi": -0.14800175096449408,
+          "max_drawdown": 0.0534045287888917,
+          "profit_factor": 0.8083730518404542
+        }
+      ],
+      "entry_price_strata": [
+        {
+          "range": "<0.50",
+          "samples": 182,
+          "win_rate": 0.24175824175824176,
+          "average_entry_price": 0.23944505494505494,
+          "roi": -0.15074063146947925,
+          "max_drawdown": 0.2837105992959213,
+          "profit_factor": 0.8064398538696558
+        },
+        {
+          "range": "0.50-0.60",
+          "samples": 7,
+          "win_rate": 0.42857142857142855,
+          "average_entry_price": 0.5421428571428571,
+          "roi": -0.20471059682516637,
+          "max_drawdown": 0.02121645715827595,
+          "profit_factor": 0.6414243245622565
+        },
+        {
+          "range": "0.60-0.70",
+          "samples": 2,
+          "win_rate": 1.0,
+          "average_entry_price": 0.61,
+          "roi": 0.6272123897082234,
+          "max_drawdown": 0.0,
+          "profit_factor": null
+        },
+        {
+          "range": "0.70-0.80",
+          "samples": 0,
+          "win_rate": null,
+          "average_entry_price": null,
+          "roi": null,
+          "max_drawdown": 0.0,
+          "profit_factor": null
+        },
+        {
+          "range": "0.80-0.90",
+          "samples": 0,
+          "win_rate": null,
+          "average_entry_price": null,
+          "roi": null,
+          "max_drawdown": 0.0,
+          "profit_factor": null
+        },
+        {
+          "range": "0.90-0.95",
+          "samples": 0,
+          "win_rate": null,
+          "average_entry_price": null,
+          "roi": null,
+          "max_drawdown": 0.0,
+          "profit_factor": null
+        },
+        {
+          "range": "0.95-0.97",
+          "samples": 0,
+          "win_rate": null,
+          "average_entry_price": null,
+          "roi": null,
+          "max_drawdown": 0.0,
+          "profit_factor": null
+        },
+        {
+          "range": "0.97+",
+          "samples": 0,
+          "win_rate": null,
+          "average_entry_price": null,
+          "roi": null,
+          "max_drawdown": 0.0,
+          "profit_factor": null
+        }
+      ]
+    },
+    {
+      "league": "cba",
+      "samples": 130,
+      "trades": 95,
+      "wins": 22,
+      "win_rate": 0.23157894736842105,
+      "model_direction_accuracy": 0.7615384615384615,
+      "market_direction_accuracy": 0.7692307692307693,
+      "average_entry_price": 0.24162105263157896,
+      "average_model_probability": 0.3283354455410416,
+      "average_edge": 0.08671439290946267,
+      "turnover": 625.8260855495516,
+      "profit": -160.32193762346034,
+      "roi": -0.25617650226688476,
+      "frictionless_roi": -0.2028348928026805,
+      "cost_drag": 0.05334160946420427,
+      "max_drawdown": 0.202153323771519,
+      "profit_factor": 0.6762382212354956,
+      "maximum_losing_streak": 11,
+      "model_brier": 0.17524753087781483,
+      "market_brier": 0.16755504615384614,
+      "brier_skill_vs_market": -0.04591019429462939,
+      "model_log_loss": 0.5305513221860497,
+      "market_log_loss": 0.5022547988299386,
+      "model_beats_market_probability": false,
+      "calibration": [
+        {
+          "range": "0.0-0.1",
+          "samples": 1,
+          "predicted": 0.09071034803817102,
+          "actual": 0.0
+        },
+        {
+          "range": "0.1-0.2",
+          "samples": 3,
+          "predicted": 0.15594030155267,
+          "actual": 0.0
+        },
+        {
+          "range": "0.2-0.3",
+          "samples": 11,
+          "predicted": 0.25702466444053956,
+          "actual": 0.18181818181818182
+        },
+        {
+          "range": "0.3-0.4",
+          "samples": 13,
+          "predicted": 0.36325263665357066,
+          "actual": 0.15384615384615385
+        },
+        {
+          "range": "0.4-0.5",
+          "samples": 19,
+          "predicted": 0.4356547205028235,
+          "actual": 0.47368421052631576
+        },
+        {
+          "range": "0.5-0.6",
+          "samples": 24,
+          "predicted": 0.5537605578887653,
+          "actual": 0.5833333333333334
+        },
+        {
+          "range": "0.6-0.7",
+          "samples": 30,
+          "predicted": 0.6484980121357807,
+          "actual": 0.8333333333333334
+        },
+        {
+          "range": "0.7-0.8",
+          "samples": 17,
+          "predicted": 0.7344813837056131,
+          "actual": 0.8235294117647058
+        },
+        {
+          "range": "0.8-0.9",
+          "samples": 12,
+          "predicted": 0.826979643960562,
+          "actual": 1.0
+        }
+      ],
+      "edge_strata": [
+        {
+          "range": "<0%",
+          "samples": 0,
+          "win_rate": null,
+          "average_entry_price": null,
+          "roi": null,
+          "max_drawdown": 0.0,
+          "profit_factor": null
+        },
+        {
+          "range": "0%-2%",
+          "samples": 0,
+          "win_rate": null,
+          "average_entry_price": null,
+          "roi": null,
+          "max_drawdown": 0.0,
+          "profit_factor": null
+        },
+        {
+          "range": "2%-5%",
+          "samples": 10,
+          "win_rate": 0.5,
+          "average_entry_price": 0.3218,
+          "roi": 0.2281202453401217,
+          "max_drawdown": 0.019007758600563206,
+          "profit_factor": 1.4433420601794993
+        },
+        {
+          "range": "5%-10%",
+          "samples": 56,
+          "win_rate": 0.21428571428571427,
+          "average_entry_price": 0.2666428571428571,
+          "roi": -0.3049972467649875,
+          "max_drawdown": 0.1404622691808963,
+          "profit_factor": 0.6215753315665878
+        },
+        {
+          "range": ">=10%",
+          "samples": 29,
+          "win_rate": 0.1724137931034483,
+          "average_entry_price": 0.1656551724137931,
+          "roi": -0.3260922834053902,
+          "max_drawdown": 0.0982625563650156,
+          "profit_factor": 0.6192834304172101
+        }
+      ],
+      "entry_price_strata": [
+        {
+          "range": "<0.50",
+          "samples": 93,
+          "win_rate": 0.21505376344086022,
+          "average_entry_price": 0.2351505376344086,
+          "roi": -0.27932760081092084,
+          "max_drawdown": 0.20775422585270278,
+          "profit_factor": 0.654347596168151
+        },
+        {
+          "range": "0.50-0.60",
+          "samples": 2,
+          "win_rate": 1.0,
+          "average_entry_price": 0.5425,
+          "roi": 0.8298633971855628,
+          "max_drawdown": 0.0,
+          "profit_factor": null
+        },
+        {
+          "range": "0.60-0.70",
+          "samples": 0,
+          "win_rate": null,
+          "average_entry_price": null,
+          "roi": null,
+          "max_drawdown": 0.0,
+          "profit_factor": null
+        },
+        {
+          "range": "0.70-0.80",
+          "samples": 0,
+          "win_rate": null,
+          "average_entry_price": null,
+          "roi": null,
+          "max_drawdown": 0.0,
+          "profit_factor": null
+        },
+        {
+          "range": "0.80-0.90",
+          "samples": 0,
+          "win_rate": null,
+          "average_entry_price": null,
+          "roi": null,
+          "max_drawdown": 0.0,
+          "profit_factor": null
+        },
+        {
+          "range": "0.90-0.95",
+          "samples": 0,
+          "win_rate": null,
+          "average_entry_price": null,
+          "roi": null,
+          "max_drawdown": 0.0,
+          "profit_factor": null
+        },
+        {
+          "range": "0.95-0.97",
+          "samples": 0,
+          "win_rate": null,
+          "average_entry_price": null,
+          "roi": null,
+          "max_drawdown": 0.0,
+          "profit_factor": null
+        },
+        {
+          "range": "0.97+",
+          "samples": 0,
+          "win_rate": null,
+          "average_entry_price": null,
+          "roi": null,
+          "max_drawdown": 0.0,
+          "profit_factor": null
+        }
+      ]
+    },
+    {
+      "league": "lol",
+      "samples": 791,
+      "trades": 533,
+      "wins": 103,
+      "win_rate": 0.19324577861163228,
+      "model_direction_accuracy": 0.729456384323641,
+      "market_direction_accuracy": 0.7357774968394437,
+      "average_entry_price": 0.2262532833020638,
+      "average_model_probability": 0.3215191862929905,
+      "average_edge": 0.09526590299092667,
+      "turnover": 2403.6970413255635,
+      "profit": -637.344252658143,
+      "roi": -0.26515165667744367,
+      "frictionless_roi": -0.2036409731494414,
+      "cost_drag": 0.06151068352800226,
+      "max_drawdown": 0.6473455247532991,
+      "profit_factor": 0.6795553365155942,
+      "maximum_losing_streak": 19,
+      "model_brier": 0.18578901895801844,
+      "market_brier": 0.17307520733249052,
+      "brier_skill_vs_market": -0.07345830648698137,
+      "model_log_loss": 0.5564800081481115,
+      "market_log_loss": 0.5184425067785512,
+      "model_beats_market_probability": false,
+      "calibration": [
+        {
+          "range": "0.1-0.2",
+          "samples": 14,
+          "predicted": 0.1671164600643049,
+          "actual": 0.0
+        },
+        {
+          "range": "0.2-0.3",
+          "samples": 80,
+          "predicted": 0.2524600946429286,
+          "actual": 0.0875
+        },
+        {
+          "range": "0.3-0.4",
+          "samples": 124,
+          "predicted": 0.353111162531476,
+          "actual": 0.25
+        },
+        {
+          "range": "0.4-0.5",
+          "samples": 155,
+          "predicted": 0.4484165719835079,
+          "actual": 0.4
+        },
+        {
+          "range": "0.5-0.6",
+          "samples": 122,
+          "predicted": 0.5530809945259745,
+          "actual": 0.5327868852459017
+        },
+        {
+          "range": "0.6-0.7",
+          "samples": 161,
+          "predicted": 0.6515641658725657,
+          "actual": 0.7329192546583851
+        },
+        {
+          "range": "0.7-0.8",
+          "samples": 115,
+          "predicted": 0.7431313491430156,
+          "actual": 0.8956521739130435
+        },
+        {
+          "range": "0.8-0.9",
+          "samples": 20,
+          "predicted": 0.8235968630760844,
+          "actual": 0.9
+        }
+      ],
+      "edge_strata": [
+        {
+          "range": "<0%",
+          "samples": 0,
+          "win_rate": null,
+          "average_entry_price": null,
+          "roi": null,
+          "max_drawdown": 0.0,
+          "profit_factor": null
+        },
+        {
+          "range": "0%-2%",
+          "samples": 0,
+          "win_rate": null,
+          "average_entry_price": null,
+          "roi": null,
+          "max_drawdown": 0.0,
+          "profit_factor": null
+        },
+        {
+          "range": "2%-5%",
+          "samples": 72,
+          "win_rate": 0.2638888888888889,
+          "average_entry_price": 0.33131944444444444,
+          "roi": -0.15635459402992838,
+          "max_drawdown": 0.11287801351584525,
+          "profit_factor": 0.7831469817261928
+        },
+        {
+          "range": "5%-10%",
+          "samples": 251,
+          "win_rate": 0.2350597609561753,
+          "average_entry_price": 0.2555557768924303,
+          "roi": -0.15830818217947426,
+          "max_drawdown": 0.2303904031217188,
+          "profit_factor": 0.7992637061671937
+        },
+        {
+          "range": ">=10%",
+          "samples": 210,
+          "win_rate": 0.11904761904761904,
+          "average_entry_price": 0.15520714285714285,
+          "roi": -0.43395351465146115,
+          "max_drawdown": 0.40995721059595885,
+          "profit_factor": 0.524336303771479
+        }
+      ],
+      "entry_price_strata": [
+        {
+          "range": "<0.50",
+          "samples": 530,
+          "win_rate": 0.19245283018867926,
+          "average_entry_price": 0.22436415094339623,
+          "roi": -0.265405694264276,
+          "max_drawdown": 0.6479426050539518,
+          "profit_factor": 0.679642604252005
+        },
+        {
+          "range": "0.50-0.60",
+          "samples": 2,
+          "win_rate": 0.5,
+          "average_entry_price": 0.5125,
+          "roi": 0.07723452209381058,
+          "max_drawdown": 0.0034866367673053586,
+          "profit_factor": 1.1717868460264065
+        },
+        {
+          "range": "0.60-0.70",
+          "samples": 1,
+          "win_rate": 0.0,
+          "average_entry_price": 0.655,
+          "roi": -1.01035,
+          "max_drawdown": 0.0027904924961214875,
+          "profit_factor": 0.0
+        },
+        {
+          "range": "0.70-0.80",
+          "samples": 0,
+          "win_rate": null,
+          "average_entry_price": null,
+          "roi": null,
+          "max_drawdown": 0.0,
+          "profit_factor": null
+        },
+        {
+          "range": "0.80-0.90",
+          "samples": 0,
+          "win_rate": null,
+          "average_entry_price": null,
+          "roi": null,
+          "max_drawdown": 0.0,
+          "profit_factor": null
+        },
+        {
+          "range": "0.90-0.95",
+          "samples": 0,
+          "win_rate": null,
+          "average_entry_price": null,
+          "roi": null,
+          "max_drawdown": 0.0,
+          "profit_factor": null
+        },
+        {
+          "range": "0.95-0.97",
+          "samples": 0,
+          "win_rate": null,
+          "average_entry_price": null,
+          "roi": null,
+          "max_drawdown": 0.0,
+          "profit_factor": null
+        },
+        {
+          "range": "0.97+",
+          "samples": 0,
+          "win_rate": null,
+          "average_entry_price": null,
+          "roi": null,
+          "max_drawdown": 0.0,
+          "profit_factor": null
+        }
+      ]
+    }
+  ]
+}

@@ -75,5 +75,5 @@ class Recommendation:
     stake_fraction: float
     confidence: float
     reasons: tuple[str, ...] = field(default_factory=tuple)
+    decision: str = "NO TRADE"
     generated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
-
