@@ -1,10 +1,20 @@
 from datetime import date
 import unittest
 
-from prediction_agent.cs2_model import Cs2Series, evaluate_cs2, fit_cs2
+from prediction_agent.cs2_model import Cs2Series, evaluate_cs2, fit_cs2, walk_forward_probabilities
 
 
 class Cs2ModelTests(unittest.TestCase):
+    def test_walk_forward_probability_is_computed_before_update(self):
+        games = [
+            Cs2Series("1", date(2024, 1, 1), "A", "B", ("a",), ("b",), 1),
+            Cs2Series("2", date(2024, 1, 2), "A", "B", ("a",), ("b",), 1),
+        ]
+        rows = walk_forward_probabilities(games)
+        self.assertEqual(rows[0]["model_probability_a"], 0.5)
+        self.assertGreater(rows[1]["model_probability_a"], 0.5)
+        self.assertEqual(rows[1]["prior_samples"], 1)
+
     def test_roster_aware_model_learns_players_and_team(self):
         games = [Cs2Series(str(i), date(2024, 1, 1), "A", "B",
                            ("a1", "a2", "a3", "a4", "a5"),

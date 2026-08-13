@@ -1,0 +1,247 @@
+{
+  "generated_at": "2026-08-13T12:53:59.866154+00:00",
+  "protocol": {
+    "model_history": "Valve series replayed chronologically; probability captured before each result update",
+    "validation": "2025 market matches",
+    "locked_test": "2026 market matches",
+    "decision_times": [
+      24,
+      6,
+      1
+    ],
+    "edge_threshold": 0.05,
+    "execution": "aggregate historical price + 0.01 adverse slippage proxy; unit stake; fee approximation",
+    "real_money_approval_allowed": false
+  },
+  "coverage": {
+    "polymarket_games": 8318,
+    "model_joined_games": 3704,
+    "join_rate": 0.4452993508054821,
+    "unmatched_top_teams": [
+      [
+        "Bounty Hunters Esports",
+        103
+      ],
+      [
+        "CYBERSHOKE Esports",
+        101
+      ],
+      [
+        "Keyd",
+        95
+      ],
+      [
+        "largadosypelados",
+        94
+      ],
+      [
+        "Misa Esports",
+        92
+      ],
+      [
+        "Team Nemesis",
+        90
+      ],
+      [
+        "Sashi Esport",
+        83
+      ],
+      [
+        "BetBoom Team",
+        83
+      ],
+      [
+        "MANA eSports",
+        78
+      ],
+      [
+        "UNiTY esports",
+        78
+      ],
+      [
+        "AM Gaming",
+        78
+      ],
+      [
+        "Betclic Apogee Esports",
+        77
+      ],
+      [
+        "Leo Team",
+        75
+      ],
+      [
+        "Aurora Gaming",
+        75
+      ],
+      [
+        "Procyon Gaming",
+        74
+      ],
+      [
+        "WW Team",
+        71
+      ],
+      [
+        "NIP",
+        68
+      ],
+      [
+        "Oxuji Esports",
+        66
+      ],
+      [
+        "Inner Circle Esports",
+        65
+      ],
+      [
+        "Yawara Esports",
+        65
+      ],
+      [
+        "AaB esport",
+        64
+      ],
+      [
+        "ALGO Esports",
+        61
+      ],
+      [
+        "FUT Esports",
+        57
+      ],
+      [
+        "Fire Flux Esports",
+        55
+      ],
+      [
+        "XI Esport",
+        55
+      ],
+      [
+        "LAG Gaming",
+        54
+      ],
+      [
+        "Rebels Gaming",
+        54
+      ],
+      [
+        "Aurora Young Blood",
+        51
+      ],
+      [
+        "Vasco Esports",
+        50
+      ],
+      [
+        "GenOne",
+        47
+      ]
+    ]
+  },
+  "results": {
+    "T-24h": {
+      "all": {
+        "observations": 1241,
+        "bets": 732,
+        "wins": 331,
+        "hit_rate": 0.4521857923497268,
+        "proxy_profit_per_unit_stake": -26.78635328853037,
+        "proxy_roi": -0.03659337880946772,
+        "model_brier": 0.21243127830932393,
+        "market_brier": 0.20737478706688156
+      },
+      "validation_2025": {
+        "observations": 243,
+        "bets": 152,
+        "wins": 82,
+        "hit_rate": 0.5394736842105263,
+        "proxy_profit_per_unit_stake": 26.445209940491534,
+        "proxy_roi": 0.17398164434533903,
+        "model_brier": 0.21997222021073465,
+        "market_brier": 0.23300730452674898
+      },
+      "locked_test_2026": {
+        "observations": 998,
+        "bets": 580,
+        "wins": 249,
+        "hit_rate": 0.42931034482758623,
+        "proxy_profit_per_unit_stake": -53.2315632290219,
+        "proxy_roi": -0.09177855729141707,
+        "model_brier": 0.21059515718503255,
+        "market_brier": 0.20113360295591182
+      }
+    },
+    "T-6h": {
+      "all": {
+        "observations": 3134,
+        "bets": 1824,
+        "wins": 752,
+        "hit_rate": 0.41228070175438597,
+        "proxy_profit_per_unit_stake": -36.123011193800814,
+        "proxy_roi": -0.019804282452741673,
+        "model_brier": 0.21985271150761468,
+        "market_brier": 0.2100577943522655
+      },
+      "validation_2025": {
+        "observations": 625,
+        "bets": 382,
+        "wins": 184,
+        "hit_rate": 0.4816753926701571,
+        "proxy_profit_per_unit_stake": 61.452324818391,
+        "proxy_roi": 0.16086996025756806,
+        "model_brier": 0.22577595683712778,
+        "market_brier": 0.23143432
+      },
+      "locked_test_2026": {
+        "observations": 2509,
+        "bets": 1442,
+        "wins": 568,
+        "hit_rate": 0.39389736477115117,
+        "proxy_profit_per_unit_stake": -97.57533601219181,
+        "proxy_roi": -0.06766666852440487,
+        "model_brier": 0.218377211973559,
+        "market_brier": 0.20473283280191312
+      }
+    },
+    "T-1h": {
+      "all": {
+        "observations": 3385,
+        "bets": 1965,
+        "wins": 786,
+        "hit_rate": 0.4,
+        "proxy_profit_per_unit_stake": -82.26073840187168,
+        "proxy_roi": -0.04186297119688126,
+        "model_brier": 0.2193076366596011,
+        "market_brier": 0.20746963249630723
+      },
+      "validation_2025": {
+        "observations": 655,
+        "bets": 389,
+        "wins": 188,
+        "hit_rate": 0.4832904884318766,
+        "proxy_profit_per_unit_stake": 51.0285092672105,
+        "proxy_roi": 0.1311786870622378,
+        "model_brier": 0.22386064860138744,
+        "market_brier": 0.22853031679389313
+      },
+      "locked_test_2026": {
+        "observations": 2730,
+        "bets": 1576,
+        "wins": 598,
+        "hit_rate": 0.37944162436548223,
+        "proxy_profit_per_unit_stake": -133.2892476690822,
+        "proxy_roi": -0.08457439572911306,
+        "model_brier": 0.2182152473475608,
+        "market_brier": 0.20241661117216117
+      }
+    }
+  },
+  "limitations": [
+    "public price history is an aggregate price series, not historical executable asks or depth",
+    "Valve match records contain dates but not exact start times; joins allow a one-day timezone tolerance",
+    "ambiguous same-team rematches are excluded",
+    "this report can reject but cannot approve real-money deployment"
+  ]
+}

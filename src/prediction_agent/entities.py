@@ -15,7 +15,17 @@ NBA = {
     "Wizards": "Washington Wizards", "LA Clippers": "Los Angeles Clippers",
 }
 
+CS2 = {
+    "NAVI": "Natus Vincere", "NaVi": "Natus Vincere", "Team Vitality": "Vitality",
+    "Team Spirit": "Spirit", "FaZe Clan": "FaZe", "G2 Esports": "G2",
+    "Team Liquid": "Liquid", "Team Falcons": "Falcons",
+}
+
 
 def canonical_team(sport: str, name: str) -> str:
     cleaned = " ".join(name.split())
-    return NBA.get(cleaned, cleaned) if sport == "nba" else cleaned
+    if sport == "nba":
+        return NBA.get(cleaned, cleaned)
+    if sport == "cs2":
+        return CS2.get(cleaned, cleaned)
+    return cleaned

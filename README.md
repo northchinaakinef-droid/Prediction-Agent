@@ -44,7 +44,7 @@ NBA/CBA 的规范输入列为 `event_id,played_at,team_a,team_b,team_a_won`。�
 
 ## 云服务器常驻运行
 
-生产环境使用一台 Linux VPS/云服务器运行 Docker 容器，不依赖本机、Codex 桌面程序或 GitHub Actions。容器默认每天北京时间 08:15 执行：加载已冻结的 NBA/LoL 模型 → 获取当天赛程与市场 → 生成报告 → 推送飞书。CBA 当前暂停；CS2 只有在完成独立训练、校准和盲测后才会进入生产推送。`/health` 返回最近一次运行时间和错误状态。
+生产环境使用一台 Linux VPS/云服务器运行 Docker 容器，不依赖本机、Codex 桌面程序或 GitHub Actions。容器默认每天北京时间 08:15 执行：加载已冻结的 NBA/LoL/CS2 模型 → 获取当天赛程与市场 → 生成报告 → 推送飞书。CBA 当前暂停；CS2 已进入研究概率推送，但 2026 市场锁箱回测未通过，因此强制 `NO_BET`。`/health` 返回最近一次运行时间和错误状态。
 
 模型训练与每日预测分开：训练任务只有在获得新赛季数据后人工触发，必须先通过验证和锁箱测试，再把模型文件放入服务器 `artifacts/`。每日任务只能读取模型，不能擅自改动参数或重训。
 
@@ -66,7 +66,9 @@ The next model uses the decision-time Polymarket probability as a log-odds offse
 
 ## CS2 roster-aware baseline
 
-The first CS2 baseline reads Valve's public Regional Standings snapshots and uses only pre-match team and five-player roster identity. It trains on 2024, tunes on 2025, and keeps 2026 as a locked chronological test. Map pool, veto, LAN/online context, and executable historical odds remain separate required layers; without odds, the artifact is never approved for real-money use.
+The first CS2 baseline reads Valve's public Regional Standings snapshots and uses only pre-match team and five-player roster identity. It trains on 2024, tunes on 2025, and keeps 2026 as a locked chronological test. Its separate Polymarket market test replays every model prediction before updating with the result and samples prices at T−24h, T−6h, and T−1h. The 2026 proxy ROI was negative at all three windows (−9.2%, −6.8%, and −8.5%), so real-money approval remains false. See `reports/CS2_历史市场锁箱回测.md`.
+
+HLTV pages are not scraped because their terms prohibit data mining/web scraping. For the next map/veto/LAN layer, the preferred source is GRID Open Access (official CS2 telemetry, application required) or a licensed commercial feed. GRID access and license approval are a data prerequisite, not a server prerequisite; never put its token in Git.
 
 ```bash
 prediction-agent cs2-train data/external/valve_cs2_vrs

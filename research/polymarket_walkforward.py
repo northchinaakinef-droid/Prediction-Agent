@@ -30,6 +30,7 @@ LEAGUES = {
     "cba": {"tag": 103097, "start": "2025-12-01", "end": "2026-07-01"},
     # Include the previous official Worlds as historical context, plus 2026 H1.
     "lol": {"tag": 65, "start": "2025-10-15", "end": "2026-07-01"},
+    "cs2": {"tag": 100780, "start": "2025-01-01", "end": "2027-01-01"},
 }
 
 
@@ -58,11 +59,13 @@ def iso_ts(value: str) -> int:
 def fetch_events(tag: int, start: str, end: str, cache: Path, refresh: bool = False) -> list[dict[str, Any]]:
     if cache.exists() and not refresh:
         return json.loads(cache.read_text(encoding="utf-8"))
-    rows: list[dict[str, Any]] = []
-    cursor: str | None = None
+    partial = cache.with_suffix(cache.suffix + ".partial")
+    state = json.loads(partial.read_text(encoding="utf-8")) if partial.exists() else {}
+    rows: list[dict[str, Any]] = state.get("events", [])
+    cursor: str | None = state.get("next_cursor")
     while True:
         params: dict[str, object] = {
-            "tag_id": tag, "closed": "true", "limit": 500,
+            "tag_id": tag, "closed": "true", "limit": 20,
             "start_time_min": start + "T00:00:00Z", "start_time_max": end + "T00:00:00Z",
             "order": "startTime", "ascending": "true",
         }
@@ -74,12 +77,15 @@ def fetch_events(tag: int, start: str, end: str, cache: Path, refresh: bool = Fa
             break
         rows.extend(page)
         next_cursor = response.get("next_cursor")
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        partial.write_text(json.dumps({"events": rows, "next_cursor": next_cursor}, ensure_ascii=False), encoding="utf-8")
         if not next_cursor or next_cursor == cursor or len(rows) >= 10_000:
             break
         cursor = next_cursor
         time.sleep(0.15)
     cache.parent.mkdir(parents=True, exist_ok=True)
     cache.write_text(json.dumps(rows, ensure_ascii=False), encoding="utf-8")
+    partial.unlink(missing_ok=True)
     return rows
 
 

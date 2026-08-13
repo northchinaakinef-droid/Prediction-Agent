@@ -4,7 +4,7 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-from .http import get_json
+from .http import get_json, post_json
 
 
 GAMMA = "https://gamma-api.polymarket.com"
@@ -26,15 +26,24 @@ class PolymarketClient:
     def sports(self) -> list[dict[str, Any]]:
         return get_json(f"{GAMMA}/sports", timeout=self.timeout)
 
-    def events_by_tag(self, tag_id: str, *, limit: int = 100) -> list[dict[str, Any]]:
+    def events_by_tag(
+        self,
+        tag_id: str,
+        *,
+        limit: int = 100,
+        active: bool = True,
+        closed: bool = False,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
         return get_json(
             f"{GAMMA}/events",
             {
                 "tag_id": tag_id,
                 "related_tags": "true",
                 "limit": limit,
-                "active": "true",
-                "closed": "false",
+                "active": str(active).lower(),
+                "closed": str(closed).lower(),
+                "offset": offset,
             },
             self.timeout,
         )
@@ -62,6 +71,27 @@ class PolymarketClient:
     def midpoint(self, token_id: str) -> float:
         row = get_json(f"{CLOB}/midpoint", {"token_id": token_id}, self.timeout)
         return float(row["mid"])
+
+    def price_history(
+        self, token_id: str, *, start_ts: int, end_ts: int, fidelity: int = 30
+    ) -> list[dict[str, Any]]:
+        """Public aggregate price history; this is not historical executable depth."""
+        row = get_json(
+            f"{CLOB}/prices-history",
+            {"market": token_id, "startTs": start_ts, "endTs": end_ts, "fidelity": fidelity},
+            self.timeout,
+        )
+        return list(row.get("history", []))
+
+    def batch_price_history(self, markets: list[dict[str, object]]) -> Any:
+        """Fetch up to 20 public price histories using Polymarket's batch endpoint."""
+        if not 1 <= len(markets) <= 20:
+            raise ValueError("batch price history requires 1 to 20 markets")
+        return post_json(
+            f"{CLOB}/batch-prices-history",
+            {"markets": markets},
+            timeout=self.timeout,
+        )
 
     def holders(self, condition_id: str, *, limit: int = 20) -> list[dict[str, Any]]:
         return get_json(f"{DATA}/holders", {"market": condition_id, "limit": limit}, self.timeout)

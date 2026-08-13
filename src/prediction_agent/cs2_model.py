@@ -29,6 +29,8 @@ class Cs2Model:
     player_ratings: dict[str, float]
     team_games: dict[str, int]
     player_games: dict[str, int]
+    latest_team_rosters: dict[str, tuple[str, ...]]
+    team_last_game: dict[str, str]
     trained_through: str
     samples: int
     team_weight: float = 0.65
@@ -112,7 +114,7 @@ def load_valve_vrs(root: str | Path, *, start_year: int = 2024) -> list[Cs2Serie
 
 
 def _new_model(team_weight: float, team_k: float, player_k: float) -> Cs2Model:
-    return Cs2Model({}, {}, {}, {}, "", 0, team_weight, team_k, player_k)
+    return Cs2Model({}, {}, {}, {}, {}, {}, "", 0, team_weight, team_k, player_k)
 
 
 def _update(model: Cs2Model, game: Cs2Series) -> float:
@@ -129,6 +131,12 @@ def _update(model: Cs2Model, game: Cs2Series) -> float:
         model.player_games[player] = model.player_games.get(player, 0) + 1
     model.team_games[game.team_a] = model.team_games.get(game.team_a, 0) + 1
     model.team_games[game.team_b] = model.team_games.get(game.team_b, 0) + 1
+    if game.roster_a:
+        model.latest_team_rosters[game.team_a] = game.roster_a
+    if game.roster_b:
+        model.latest_team_rosters[game.team_b] = game.roster_b
+    model.team_last_game[game.team_a] = game.played_at.isoformat()
+    model.team_last_game[game.team_b] = game.played_at.isoformat()
     model.samples += 1
     model.trained_through = game.played_at.isoformat()
     return probability
@@ -142,6 +150,32 @@ def fit_cs2(games: Iterable[Cs2Series], *, team_weight: float = .65,
     if not model.samples:
         raise ValueError("no CS2 series supplied")
     return model
+
+
+def walk_forward_probabilities(
+    games: Iterable[Cs2Series], *, team_weight: float = .65,
+    team_k: float = 24.0, player_k: float = 8.0,
+) -> list[dict[str, object]]:
+    """Return each series probability before that result updates the model.
+
+    This is intended for historical market joins. It prevents a future result or
+    roster from leaking into an earlier decision-time prediction.
+    """
+    model = _new_model(team_weight, team_k, player_k)
+    rows: list[dict[str, object]] = []
+    for game in sorted(games, key=lambda item: (item.played_at, item.event_id)):
+        probability = model.probability(game.team_a, game.team_b, game.roster_a, game.roster_b)
+        rows.append({
+            "event_id": game.event_id,
+            "played_at": game.played_at.isoformat(),
+            "team_a": game.team_a,
+            "team_b": game.team_b,
+            "team_a_won": game.team_a_won,
+            "model_probability_a": probability,
+            "prior_samples": model.samples,
+        })
+        _update(model, game)
+    return rows
 
 
 def _score(model: Cs2Model, games: list[Cs2Series]) -> dict:
@@ -203,3 +237,8 @@ def save_cs2(model: Cs2Model, evaluation: dict, path: str | Path) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps({"model": model.as_dict(), "evaluation": evaluation},
                                  ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def load_cs2(path: str | Path) -> tuple[Cs2Model, dict]:
+    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    return Cs2Model(**payload["model"]), payload.get("evaluation", {})
