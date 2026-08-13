@@ -82,7 +82,7 @@ class FeishuAppClient:
 
 
 def format_daily_report(report: dict[str, Any], report_date: date | None = None) -> str:
-    day = report_date or date.today()
+    day = report_date or (date.fromisoformat(report["report_date"]) if report.get("report_date") else date.today())
     rows = sorted(report.get("recommendations", []), key=lambda row: row.get("action") != "BET")
     bankroll = report.get("bankroll_usdc")
     bankroll_line = f"折算本金：{float(bankroll):.2f} USDC" if bankroll is not None else "折算本金：等待当日汇率"
@@ -96,6 +96,22 @@ def format_daily_report(report: dict[str, Any], report_date: date | None = None)
         "仅供研究，不保证收益。请以实际可成交盘口为准。",
         "",
     ]
+    status = report.get("model_status", {})
+    if status:
+        lines.extend([
+            f"模型：独立胜率={'是' if status.get('independent_probability') else '否'}｜"
+            f"概率验收={'通过' if status.get('probability_approved') else '未通过'}｜"
+            f"真钱验收={'通过' if status.get('real_money_approved') else '未通过'}",
+            f"训练截至：{status.get('trained_through', '-')}｜样本：{status.get('samples', 0)}",
+            "",
+        ])
+    sport_status = report.get("sport_status", {})
+    if sport_status:
+        lines.append("模型状态：" + "｜".join(
+            f"{sport.upper()}={'就绪' if value.get('ready') else '未就绪'}"
+            for sport, value in sport_status.items()
+        ))
+        lines.append("")
     if not rows:
         lines.append("今日没有达到风控阈值的下注机会（NO BET）。")
     for index, row in enumerate(rows, 1):
@@ -105,8 +121,10 @@ def format_daily_report(report: dict[str, Any], report_date: date | None = None)
         lines.extend([
             f"{marker} {index}. [{str(row.get('sport', '')).upper()}] {row.get('event', row.get('event_id', '未知赛事'))}",
             f"方向：{row.get('outcome', '-')}｜结论：{action}",
-            f"模型概率：{float(row.get('model_probability', 0)):.1%}｜市场概率：{float(row.get('market_probability', 0)):.1%}",
-            f"净优势：{float(row.get('edge', 0)):.1%}｜金额：{float(row.get('stake', 0)):.2f}",
+            f"独立模型概率：{float(row.get('model_probability', 0)):.1%}｜市场概率：{float(row.get('market_probability', 0)):.1%}",
+            f"风控后概率：{float(row.get('decision_probability', row.get('model_probability', 0))):.1%}｜原始优势：{float(row.get('raw_edge', row.get('edge', 0))):.1%}",
+            f"成本后净优势：{float(row.get('edge', 0)):.1%}｜净EV：{float(row.get('expected_value', 0)):.1%}｜建议金额：{float(row.get('stake', 0)):.2f} USDC",
+            f"市场可买价：{float(row.get('execution_price', row.get('market_probability', 0))):.3f}",
             f"依据：{'；'.join(row.get('reasons', [])) or '无'}",
             "",
         ])

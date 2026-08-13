@@ -26,6 +26,9 @@ class CoreTests(unittest.TestCase):
                            spread=0.01, available_size=1000, trading_enabled=True)
         self.assertEqual(result.action, "BET")
         self.assertLessEqual(result.stake, 7.5)
+        self.assertEqual(result.model_probability, 0.8)
+        self.assertAlmostEqual(result.decision_probability, 0.77)
+        self.assertAlmostEqual(result.raw_edge, 0.3)
 
     def test_explicit_no_trade_when_market_quality_is_missing(self):
         result = recommend(event_id="x", outcome="yes", model_probability=0.8,
@@ -89,6 +92,7 @@ class CoreTests(unittest.TestCase):
         ]})
         self.assertLess(message.index("opportunity"), message.index("ordinary"))
         self.assertIn("★ 合适机会", message)
+        self.assertIn("独立模型概率", message)
 
 
 if __name__ == "__main__":

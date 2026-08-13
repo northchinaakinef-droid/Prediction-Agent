@@ -69,6 +69,8 @@ class Recommendation:
     action: str
     model_probability: float
     market_probability: float
+    decision_probability: float
+    raw_edge: float
     edge: float
     expected_value: float
     stake: float

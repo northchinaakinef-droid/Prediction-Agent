@@ -7,8 +7,13 @@ from dataclasses import asdict
 from pathlib import Path
 
 from .backtest import load_csv, run_backtest
+from .cs2_model import evaluate_cs2, load_valve_vrs, save_cs2
 from .delivery import FeishuAppClient, FeishuWebhookClient, format_daily_report
 from .next_model import DEFAULT_FEATURES, load_jsonl, walk_forward_evaluate
+from .lol_daily import run_daily
+from .lol_model import evaluate_periods, evaluate_years, fit_elo, load_oracle_elixir, save_model
+from .lol_model import load_canonical_games
+from .sports_daily import run_all
 from .providers.polymarket import PolymarketClient
 from .risk import recommend
 
@@ -44,6 +49,31 @@ def main() -> None:
     notify = sub.add_parser("notify", help="send a prepared daily JSON report to Feishu")
     notify.add_argument("report", help="JSON file containing recommendations")
     notify.add_argument("--dry-run", action="store_true", help="print the exact message without sending")
+    lol_train = sub.add_parser("lol-train", help="train an independent LoL model from multi-year Oracle's Elixir CSVs")
+    lol_train.add_argument("csv", nargs="+", help="chronological Oracle's Elixir CSV files")
+    lol_train.add_argument("--output", default="artifacts/lol_model.json")
+    lol_train.add_argument("--train-end", type=int, default=2023)
+    lol_train.add_argument("--validation-year", type=int, default=2024)
+    lol_train.add_argument("--test-year", type=int, default=2025)
+    cs2_train = sub.add_parser("cs2-train", help="train the roster-aware CS2 model from Valve VRS snapshots")
+    cs2_train.add_argument("source", help="cloned ValveSoftware/counter-strike_regional_standings repository")
+    cs2_train.add_argument("--output", default="artifacts/cs2_model.json")
+    daily = sub.add_parser("lol-daily", help="build today's independent LoL market report")
+    daily.add_argument("--model", default="artifacts/lol_model.json")
+    daily.add_argument("--output", default="reports/lol_daily.json")
+    sport_train = sub.add_parser("sport-train", help="train one independent NBA/CBA/LoL model")
+    sport_train.add_argument("sport", choices=("nba", "cba", "lol"))
+    sport_train.add_argument("csv", nargs="+")
+    sport_train.add_argument("--format", choices=("canonical", "oracle-elixir"), default="canonical")
+    sport_train.add_argument("--output-dir", default="artifacts")
+    sport_train.add_argument("--train-end", type=int, default=2023)
+    sport_train.add_argument("--validation-start", type=int, default=2024)
+    sport_train.add_argument("--validation-end", type=int, default=2024)
+    sport_train.add_argument("--test-start", type=int, default=2025)
+    sport_train.add_argument("--test-end", type=int, default=2025)
+    all_daily = sub.add_parser("daily", help="analyze today's NBA and LoL markets (CBA paused)")
+    all_daily.add_argument("--model-dir", default="artifacts")
+    all_daily.add_argument("--output", default="reports/daily.json")
     args = parser.parse_args()
     if args.command == "polymarket":
         rows = PolymarketClient().search_sports(args.query, limit=args.limit)
@@ -71,6 +101,41 @@ def main() -> None:
         if args.output:
             Path(args.output).write_text(payload, encoding="utf-8")
         print(payload)
+    elif args.command == "lol-train":
+        games = load_oracle_elixir(args.csv)
+        evaluation = evaluate_years(games, train_end=args.train_end,
+                                    validation_year=args.validation_year, test_year=args.test_year)
+        # Production forecasts use every game available before the daily run;
+        # the untouched historical final-test result remains recorded separately.
+        model = fit_elo(games)
+        save_model(model, args.output, evaluation)
+        print(json.dumps({"saved": args.output, "model": model.as_dict(),
+                          "evaluation": evaluation}, ensure_ascii=False, indent=2))
+    elif args.command == "lol-daily":
+        report = run_daily(args.model, args.output)
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+    elif args.command == "cs2-train":
+        games = load_valve_vrs(args.source)
+        model, evaluation = evaluate_cs2(games)
+        save_cs2(model, evaluation, args.output)
+        print(json.dumps({"saved": args.output, "evaluation": evaluation}, ensure_ascii=False, indent=2))
+    elif args.command == "sport-train":
+        if args.format == "oracle-elixir":
+            if args.sport != "lol":
+                parser.error("oracle-elixir format is only valid for LoL")
+            games = load_oracle_elixir(args.csv)
+        else:
+            games = load_canonical_games(args.csv, args.sport)
+        evaluation = evaluate_periods(
+            games, train_end=args.train_end, validation_start=args.validation_start,
+            validation_end=args.validation_end, test_start=args.test_start, test_end=args.test_end,
+        )
+        model = fit_elo(games)
+        target = Path(args.output_dir) / f"{args.sport}_model.json"
+        save_model(model, target, evaluation)
+        print(json.dumps({"saved": str(target), "evaluation": evaluation}, ensure_ascii=False, indent=2))
+    elif args.command == "daily":
+        print(json.dumps(run_all(args.model_dir, args.output), ensure_ascii=False, indent=2))
     else:
         report_data = json.loads(Path(args.report).read_text(encoding="utf-8"))
         message = format_daily_report(report_data)

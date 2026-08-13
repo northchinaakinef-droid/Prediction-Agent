@@ -52,6 +52,7 @@ def recommend(
     market_probability = decimal_implied_probability(decimal_odds)
     # Low-confidence models should not manufacture large edges.
     shrunk_probability = market_probability + confidence * (model_probability - market_probability)
+    raw_edge = model_probability - market_probability
     edge = shrunk_probability - market_probability
     net_edge = edge - max(0.0, estimated_cost)
     ev = shrunk_probability * decimal_odds - 1 - max(0.0, estimated_cost)
@@ -86,8 +87,12 @@ def recommend(
         event_id=event_id,
         outcome=outcome,
         action=action,
-        model_probability=shrunk_probability,
+        # Keep the independently-produced probability visible.  Confidence
+        # shrinkage is a risk decision, not a model prediction.
+        model_probability=model_probability,
         market_probability=market_probability,
+        decision_probability=shrunk_probability,
+        raw_edge=raw_edge,
         edge=edge,
         expected_value=ev,
         stake=round(bankroll * stake_fraction, 2),

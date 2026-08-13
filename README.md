@@ -23,9 +23,54 @@ python -m prediction_agent.cli next-evaluate data/next_model.jsonl nba --output 
 python -m unittest discover -s tests
 ```
 
-## Next market-anchored model
+## NBA、CBA、LoL 独立胜率模型
 
-The next model uses the decision-time Polymarket probability as a log-odds offset and learns only incremental corrections from independent information such as injuries, lineups, rest, patches, map pools, and multi-book consensus. NBA, CBA, LoL, and CS2 are always trained separately.
+三项运动必须分别训练、验证、锁箱测试和登记生产模型，不能混合训练，也不能由其中一个模型替代另一个。当前基础模型使用多年历史赛果构建赛前 Elo；LoL 再将单局概率换算成 BO3/BO5 系列赛概率。Polymarket 只在最后用于比较可成交价格、成本后净优势和 EV，不参与独立胜率计算。
+
+推荐的数据划分固定为：2020–2023 训练、2024 验证、2025 最终锁箱测试，2026 只在验收完成后用于生产更新。最终测试会记录在模型工件中，但不会因此自动开放真钱建议；还必须另行提供决策时点的历史可成交盘口，通过含手续费、点差和滑点的 ROI 验收。
+
+```powershell
+$env:PYTHONPATH="src"
+python -m prediction_agent.cli sport-train nba data/raw/nba/*.csv
+python -m prediction_agent.cli sport-train cba data/raw/cba/*.csv
+python -m prediction_agent.cli sport-train lol data/raw/lol/*.csv --format oracle-elixir
+python -m prediction_agent.cli daily --model-dir artifacts --output reports/daily.json
+python -m prediction_agent.cli notify reports/daily.json --dry-run
+```
+
+NBA/CBA 的规范输入列为 `event_id,played_at,team_a,team_b,team_a_won`。这些字段都是赛前已知实体与赛后标签；任何比赛中的技术统计都不能作为同一场比赛的赛前特征。LoL 可直接读取 Oracle's Elixir 团队赛果行。
+
+日报明确区分：独立模型概率、风控后概率、市场价格、原始优势、成本后净优势、净 EV 和建议金额。无法核验开赛时间、模型未验收、阵容证据缺失或市场质量不合格时输出 `NO BET` 并写明原因。
+
+## 云服务器常驻运行
+
+生产环境使用一台 Linux VPS/云服务器运行 Docker 容器，不依赖本机、Codex 桌面程序或 GitHub Actions。容器默认每天北京时间 08:15 执行：加载已冻结的 NBA/LoL 模型 → 获取当天赛程与市场 → 生成报告 → 推送飞书。CBA 当前暂停；CS2 只有在完成独立训练、校准和盲测后才会进入生产推送。`/health` 返回最近一次运行时间和错误状态。
+
+模型训练与每日预测分开：训练任务只有在获得新赛季数据后人工触发，必须先通过验证和锁箱测试，再把模型文件放入服务器 `artifacts/`。每日任务只能读取模型，不能擅自改动参数或重训。
+
+服务器部署：
+
+```bash
+cp .env.example .env
+# 在 .env 中填写飞书密钥、本金和运行时间
+docker compose build
+docker compose up -d
+curl http://127.0.0.1:8080/health
+```
+
+`compose.yaml` 把模型以只读方式挂载，报告和数据使用持久卷。容器异常退出后自动重启，并限制日志大小。GitHub Actions 只运行单元测试，不承担生产调度。
+
+## 旧版市场锚定模型（非 LoL 生产概率）
+
+The next model uses the decision-time Polymarket probability as a log-odds offset and learns only incremental corrections from independent information such as injuries, lineups, rest, patches, map pools, and multi-book consensus. NBA, LoL, and CS2 are always trained separately; CBA is currently paused.
+
+## CS2 roster-aware baseline
+
+The first CS2 baseline reads Valve's public Regional Standings snapshots and uses only pre-match team and five-player roster identity. It trains on 2024, tunes on 2025, and keeps 2026 as a locked chronological test. Map pool, veto, LAN/online context, and executable historical odds remain separate required layers; without odds, the artifact is never approved for real-money use.
+
+```bash
+prediction-agent cs2-train data/external/valve_cs2_vrs
+```
 
 Input is JSONL. Every event requires `decision_at`, `start_at`, `settled_at`, market probability, result, and features carrying both `observed_at` and `source`. Features observed after the decision are rejected. See `examples/next_model_rows.jsonl`.
 

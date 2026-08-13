@@ -1,0 +1,16 @@
+services:
+  prediction-agent:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - ./artifacts:/app/artifacts:ro
+      - ./reports:/app/reports
+      - ./data:/app/data
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"

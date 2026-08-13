@@ -1,0 +1,124 @@
+from __future__ import annotations
+
+import json
+import os
+from dataclasses import asdict
+from datetime import datetime, timezone
+from pathlib import Path
+from zoneinfo import ZoneInfo
+
+from .lol_model import EloModel, load_model, series_probability
+from .providers.polymarket import PolymarketClient
+from .risk import recommend
+from .entities import canonical_team
+
+
+TAGS = {"nba": "745", "lol": "65"}
+
+
+def _field(value):
+    return json.loads(value) if isinstance(value, str) else list(value or [])
+
+
+def _start(market: dict) -> datetime | None:
+    value = market.get("gameStartTime")
+    if not value:
+        return None
+    return datetime.fromisoformat(str(value).replace("Z", "+00:00")).astimezone(timezone.utc)
+
+
+def _main_market(event: dict) -> dict | None:
+    markets = event.get("markets", [])
+    candidates = [m for m in markets if m.get("gameStartTime")]
+    return next((m for m in candidates if m.get("sportsMarketType") == "moneyline"), None) or next(
+        (m for m in candidates if m.get("question") == event.get("title")), None)
+
+
+def analyze_sport(sport: str, model: EloModel, evaluation: dict, events: list[dict], *,
+                  now: datetime, bankroll: float, estimated_cost: float = .01) -> list[dict]:
+    rows = []
+    local_day = now.astimezone(ZoneInfo(os.getenv("REPORT_TIMEZONE", "Asia/Shanghai"))).date()
+    for event in events:
+        market = _main_market(event)
+        if not market:
+            continue
+        scheduled = _start(market)
+        if scheduled and scheduled.astimezone(ZoneInfo(os.getenv("REPORT_TIMEZONE", "Asia/Shanghai"))).date() != local_day:
+            continue
+        outcomes = [str(x) for x in _field(market.get("outcomes"))]
+        prices = [float(x) for x in _field(market.get("outcomePrices"))]
+        if len(outcomes) != 2 or len(prices) != 2 or min(prices) <= 0:
+            continue
+        market_team_a, market_team_b = outcomes
+        team_a, team_b = canonical_team(sport, market_team_a), canonical_team(sport, market_team_b)
+        game_p = model.game_probability(team_a, team_b)
+        best_of = 1
+        if sport == "lol":
+            title = str(event.get("title") or "")
+            best_of = 5 if "BO5" in title else 3 if "BO3" in title else 1
+        p_a = series_probability(game_p, best_of)
+        model_ps = [p_a, 1 - p_a]
+        side = max(range(2), key=lambda index: model_ps[index] - prices[index])
+        first_bid, first_ask = market.get("bestBid"), market.get("bestAsk")
+        ask = float(first_ask) if side == 0 and first_ask is not None else (
+            1 - float(first_bid) if side == 1 and first_bid is not None else prices[side])
+        known = model.games.get(team_a, 0) >= 10 and model.games.get(team_b, 0) >= 10
+        probability_ok = bool(evaluation.get("approved_for_probability_use")) and known
+        money_ok = bool(evaluation.get("approved_for_real_money"))
+        started = scheduled is None or scheduled <= now
+        rec = recommend(
+            event_id=str(event.get("id")), outcome=outcomes[side], model_probability=model_ps[side],
+            decimal_odds=1 / ask, bankroll=bankroll, confidence=.75 if probability_ok else .25,
+            spread=float(market["spread"]) if market.get("spread") is not None else None,
+            available_size=float(market.get("liquidity") or 0), estimated_cost=estimated_cost,
+            trading_enabled=money_ok and not started,
+        )
+        reasons = model.explain(team_a, team_b)
+        reasons.append(f"{market_team_a} 独立胜率 {p_a:.1%}，{market_team_b} 独立胜率 {1-p_a:.1%}")
+        reasons.append("市场价格只用于估值和下注判断，不进入独立胜率模型")
+        if not probability_ok:
+            reasons.append("概率模型未通过锁箱验收或队伍历史样本不足")
+        if not money_ok:
+            reasons.append("未通过历史可成交赔率 ROI 验收，禁止真钱建议")
+        if started:
+            reasons.append("比赛已开始或开赛时间无法核验，禁止赛前下注")
+        row = asdict(rec)
+        row["generated_at"] = rec.generated_at.isoformat()
+        row.update({
+            "sport": sport, "event": event.get("title"),
+            "scheduled_start": scheduled.isoformat() if scheduled else None,
+            "market_probability": prices[side], "execution_price": ask,
+            "edge": rec.decision_probability - ask - estimated_cost,
+            "reasons": reasons + list(rec.reasons),
+        })
+        rows.append(row)
+    return rows
+
+
+def run_all(model_dir: str | Path, output: str | Path, *, now: datetime | None = None) -> dict:
+    now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    bankroll = float(os.getenv("BANKROLL_USDC", "1000"))
+    recommendations, statuses = [], {}
+    client = PolymarketClient(timeout=30)
+    for sport, tag in TAGS.items():
+        path = Path(model_dir) / f"{sport}_model.json"
+        if not path.exists():
+            statuses[sport] = {"ready": False, "reason": "模型工件不存在"}
+            continue
+        model, evaluation = load_model(path)
+        events = client.events_by_tag(tag, limit=100)
+        recommendations.extend(analyze_sport(sport, model, evaluation, events, now=now, bankroll=bankroll))
+        statuses[sport] = {
+            "ready": True, "trained_through": model.trained_through, "samples": model.samples,
+            "probability_approved": bool(evaluation.get("approved_for_probability_use")),
+            "real_money_approved": bool(evaluation.get("approved_for_real_money")),
+        }
+    zone = ZoneInfo(os.getenv("REPORT_TIMEZONE", "Asia/Shanghai"))
+    report = {
+        "report_date": now.astimezone(zone).date().isoformat(), "generated_at": now.isoformat(),
+        "bankroll_usdc": bankroll, "recommendations": recommendations, "sport_status": statuses,
+        "risk_notes": ["NBA、LOL 分别训练和验收；CBA 已暂停；CS2 在完成独立训练和盲测前不进入生产概率与下注建议"],
+    }
+    Path(output).parent.mkdir(parents=True, exist_ok=True)
+    Path(output).write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    return report

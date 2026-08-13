@@ -35,8 +35,6 @@ class PolymarketClient:
                 "limit": limit,
                 "active": "true",
                 "closed": "false",
-                "order": "volume_24hr",
-                "ascending": "false",
             },
             self.timeout,
         )
@@ -53,6 +51,10 @@ class PolymarketClient:
                 return list({str(e.get("id")): e for e in events}.values())[:limit]
         rows = self.markets(limit=limit)
         return [m for m in rows if needle in f"{m.get('question', '')} {m.get('description', '')}".casefold()]
+
+    def lol_events(self, *, limit: int = 100) -> list[dict[str, Any]]:
+        """Active LoL events. Tag 65 is Polymarket's primary LoL tag."""
+        return self.events_by_tag("65", limit=limit)
 
     def order_book(self, token_id: str) -> dict[str, Any]:
         return get_json(f"{CLOB}/book", {"token_id": token_id}, self.timeout)

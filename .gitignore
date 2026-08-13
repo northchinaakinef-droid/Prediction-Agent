@@ -7,3 +7,5 @@ data/raw/
 data/cache/
 data/daily/
 data/research/
+data/external/
+reports/daily.json
