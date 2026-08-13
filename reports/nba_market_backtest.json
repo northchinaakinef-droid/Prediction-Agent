@@ -1,0 +1,82 @@
+{
+  "generated_at": "2026-08-13T13:44:36.556572+00:00",
+  "protocol": {
+    "model": "chronological Elo replay; probability captured before result update",
+    "validation": "2025-10-21 through 2025-12-31",
+    "locked_test": "2026-01-01 through 2026-06-30",
+    "decision_hours": [
+      24,
+      6,
+      1
+    ],
+    "edge_threshold": 0.05,
+    "execution": "aggregate price + 0.01 adverse slippage proxy and fee approximation",
+    "real_money_approval_allowed": false
+  },
+  "coverage": {
+    "polymarket_games": 1334,
+    "model_joined_games": 1252,
+    "join_rate": 0.9385307346326837
+  },
+  "results": {
+    "T-24h": {
+      "validation_2025": {
+        "observations": 480,
+        "bets": 316,
+        "proxy_profit_per_unit_stake": -21.06851012140807,
+        "proxy_roi": -0.06667250038420276,
+        "model_brier": 0.23099343475778705,
+        "market_brier": 0.21142854166666666
+      },
+      "locked_test_2026": {
+        "observations": 769,
+        "bets": 402,
+        "proxy_profit_per_unit_stake": -49.59708050518148,
+        "proxy_roi": -0.12337582215219274,
+        "model_brier": 0.20220456324087074,
+        "market_brier": 0.19115019505851755
+      }
+    },
+    "T-6h": {
+      "validation_2025": {
+        "observations": 482,
+        "bets": 317,
+        "proxy_profit_per_unit_stake": -28.398542727827735,
+        "proxy_roi": -0.0895853082896774,
+        "model_brier": 0.23113698920564468,
+        "market_brier": 0.20803775933609958
+      },
+      "locked_test_2026": {
+        "observations": 769,
+        "bets": 417,
+        "proxy_profit_per_unit_stake": -21.53100845906907,
+        "proxy_roi": -0.05163311381071719,
+        "model_brier": 0.20220456324087074,
+        "market_brier": 0.18913523634590376
+      }
+    },
+    "T-1h": {
+      "validation_2025": {
+        "observations": 482,
+        "bets": 317,
+        "proxy_profit_per_unit_stake": -30.766408570080284,
+        "proxy_roi": -0.09705491662485893,
+        "model_brier": 0.23113698920564468,
+        "market_brier": 0.20867857883817428
+      },
+      "locked_test_2026": {
+        "observations": 767,
+        "bets": 415,
+        "proxy_profit_per_unit_stake": -35.47348602297142,
+        "proxy_roi": -0.08547827957342512,
+        "model_brier": 0.2024027858026918,
+        "market_brier": 0.18676295632333767
+      }
+    }
+  },
+  "limitations": [
+    "price history does not reconstruct executable asks or depth",
+    "baseline Elo omits injuries, confirmed starters, rest, travel, and home-court effects",
+    "a positive result cannot approve real-money use; a negative result rejects the strategy"
+  ]
+}

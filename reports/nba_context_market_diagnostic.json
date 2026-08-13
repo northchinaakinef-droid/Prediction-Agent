@@ -1,0 +1,67 @@
+{
+  "generated_at": "2026-08-13T13:47:11.004877+00:00",
+  "status": "RETROSPECTIVE_DIAGNOSTIC_ONLY",
+  "approved_for_real_money": false,
+  "reason": "2026 outcomes were inspected before this context model was developed",
+  "model_parameters": {
+    "k_factor": 20.0,
+    "home_advantage": 60.0,
+    "rest_day_value": 16.0
+  },
+  "results": {
+    "T-24h": {
+      "2025_diagnostic": {
+        "observations": 480,
+        "bets": 292,
+        "proxy_profit_per_unit_stake": -33.33372176984092,
+        "proxy_roi": -0.11415658140356479,
+        "model_brier": 0.22780029923107348,
+        "market_brier": 0.21142854166666666
+      },
+      "2026_already_seen_diagnostic": {
+        "observations": 769,
+        "bets": 369,
+        "proxy_profit_per_unit_stake": -34.24967437207236,
+        "proxy_roi": -0.09281754572377333,
+        "model_brier": 0.2011109393472892,
+        "market_brier": 0.19115019505851755
+      }
+    },
+    "T-6h": {
+      "2025_diagnostic": {
+        "observations": 482,
+        "bets": 298,
+        "proxy_profit_per_unit_stake": -55.24054853959659,
+        "proxy_roi": -0.18537096825367982,
+        "model_brier": 0.22765092739054002,
+        "market_brier": 0.20803775933609958
+      },
+      "2026_already_seen_diagnostic": {
+        "observations": 769,
+        "bets": 388,
+        "proxy_profit_per_unit_stake": -47.15631247447698,
+        "proxy_roi": -0.12153688782081695,
+        "model_brier": 0.2011109393472892,
+        "market_brier": 0.18913523634590376
+      }
+    },
+    "T-1h": {
+      "2025_diagnostic": {
+        "observations": 482,
+        "bets": 295,
+        "proxy_profit_per_unit_stake": -41.167322856369665,
+        "proxy_roi": -0.13955024697074464,
+        "model_brier": 0.22765092739054002,
+        "market_brier": 0.20867857883817428
+      },
+      "2026_already_seen_diagnostic": {
+        "observations": 767,
+        "bets": 400,
+        "proxy_profit_per_unit_stake": -51.165466056989324,
+        "proxy_roi": -0.1279136651424733,
+        "model_brier": 0.20141688626685855,
+        "market_brier": 0.18676295632333767
+      }
+    }
+  }
+}

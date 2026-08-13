@@ -26,6 +26,9 @@ class PolymarketClient:
     def sports(self) -> list[dict[str, Any]]:
         return get_json(f"{GAMMA}/sports", timeout=self.timeout)
 
+    def event(self, event_id: str) -> dict[str, Any]:
+        return get_json(f"{GAMMA}/events/{event_id}", timeout=self.timeout)
+
     def events_by_tag(
         self,
         tag_id: str,

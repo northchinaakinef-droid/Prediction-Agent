@@ -145,6 +145,41 @@ def fit_elo(games: Iterable[LolGame], *, k_factor: float = 24.0,
     return EloModel(ratings, counts, ordered[-1].played_at.date().isoformat(), len(ordered), k_factor)
 
 
+def walk_forward_elo_probabilities(
+    games: Iterable[LolGame], *, k_factor: float = 24.0,
+    seasonal_regression: float = 0.15,
+) -> list[dict[str, object]]:
+    """Capture every probability before its result updates the Elo state."""
+    ordered = sorted(games, key=lambda game: (game.played_at, game.game_id))
+    ratings: dict[str, float] = {}
+    counts: dict[str, int] = {}
+    rows: list[dict[str, object]] = []
+    current_year = ordered[0].played_at.year if ordered else None
+    for game in ordered:
+        if current_year is not None and game.played_at.year != current_year:
+            ratings = {team: 1500 + (rating - 1500) * (1 - seasonal_regression)
+                       for team, rating in ratings.items()}
+            current_year = game.played_at.year
+        rating_a = ratings.get(game.team_a, 1500.0)
+        rating_b = ratings.get(game.team_b, 1500.0)
+        probability = 1 / (1 + 10 ** ((rating_b - rating_a) / 400))
+        rows.append({
+            "event_id": game.game_id,
+            "played_at": game.played_at.date().isoformat(),
+            "team_a": game.team_a,
+            "team_b": game.team_b,
+            "team_a_won": game.team_a_won,
+            "model_probability_a": probability,
+            "prior_games_a": counts.get(game.team_a, 0),
+            "prior_games_b": counts.get(game.team_b, 0),
+        })
+        change = k_factor * (game.team_a_won - probability)
+        ratings[game.team_a], ratings[game.team_b] = rating_a + change, rating_b - change
+        counts[game.team_a] = counts.get(game.team_a, 0) + 1
+        counts[game.team_b] = counts.get(game.team_b, 0) + 1
+    return rows
+
+
 def evaluate_years(games: Iterable[LolGame], *, train_end: int = 2023,
                    validation_year: int = 2024, test_year: int = 2025) -> dict:
     """Strict chronological train/validation/final-test evaluation."""

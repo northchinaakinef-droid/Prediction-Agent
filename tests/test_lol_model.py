@@ -2,11 +2,22 @@ from datetime import datetime, timezone
 import unittest
 
 from prediction_agent.lol_daily import build_lol_report
-from prediction_agent.lol_model import EloModel, LolGame, evaluate_periods, evaluate_years, fit_elo, series_probability
+from prediction_agent.lol_model import (EloModel, LolGame, evaluate_periods, evaluate_years,
+                                        fit_elo, series_probability, walk_forward_elo_probabilities)
 from prediction_agent.sports_daily import analyze_sport
 
 
 class LolModelTests(unittest.TestCase):
+    def test_walk_forward_elo_captures_probability_before_result(self):
+        games = [
+            LolGame("1", datetime(2024, 1, 1, tzinfo=timezone.utc), "nba", "A", "B", 1),
+            LolGame("2", datetime(2024, 1, 2, tzinfo=timezone.utc), "nba", "A", "B", 1),
+        ]
+        rows = walk_forward_elo_probabilities(games)
+        self.assertEqual(rows[0]["model_probability_a"], .5)
+        self.assertGreater(rows[1]["model_probability_a"], .5)
+        self.assertEqual(rows[1]["prior_games_a"], 1)
+
     def test_series_probability(self):
         self.assertAlmostEqual(series_probability(.6, 3), .648)
         self.assertAlmostEqual(series_probability(.5, 5), .5)
