@@ -2,14 +2,16 @@ from __future__ import annotations
 
 import json
 import os
+import unicodedata
 from dataclasses import asdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from .cs2_model import Cs2Model, load_cs2
 from .lol_meta_model import LolDraftGame, LolMetaModel, load_lol_meta
 from .lol_model import EloModel, load_model, series_probability
+from .nba_model import NbaModel, load_nba
 from .providers.polymarket import PolymarketClient
 from .risk import recommend
 from .entities import canonical_team
@@ -18,8 +20,24 @@ from .entities import canonical_team
 TAGS = {"nba": "745", "lol": "65", "cs2": "100780"}
 
 
+def _in_horizon(scheduled: datetime | None, now: datetime) -> bool:
+    hours = float(os.getenv("MARKET_HORIZON_HOURS", "30"))
+    return scheduled is not None and now < scheduled <= now + timedelta(hours=hours)
+
+
+def _timing(scheduled: datetime, now: datetime) -> tuple[float, str]:
+    hours = (scheduled - now).total_seconds() / 3600
+    target = min((1, 6, 24), key=lambda value: abs(value - hours))
+    return hours, f"T-{target}h"
+
+
 def _field(value):
     return json.loads(value) if isinstance(value, str) else list(value or [])
+
+
+def _text(value: object) -> str:
+    return "".join(character for character in str(value)
+                   if unicodedata.category(character) not in {"Cc", "Cf"}).strip()
 
 
 def _start(market: dict) -> datetime | None:
@@ -36,24 +54,25 @@ def _main_market(event: dict) -> dict | None:
         (m for m in candidates if m.get("question") == event.get("title")), None)
 
 
-def analyze_sport(sport: str, model: EloModel, evaluation: dict, events: list[dict], *,
+def analyze_sport(sport: str, model: EloModel | NbaModel, evaluation: dict, events: list[dict], *,
                   now: datetime, bankroll: float, estimated_cost: float = .01) -> list[dict]:
     rows = []
-    local_day = now.astimezone(ZoneInfo(os.getenv("REPORT_TIMEZONE", "Asia/Shanghai"))).date()
     for event in events:
         market = _main_market(event)
         if not market:
             continue
         scheduled = _start(market)
-        if scheduled and scheduled.astimezone(ZoneInfo(os.getenv("REPORT_TIMEZONE", "Asia/Shanghai"))).date() != local_day:
+        if not _in_horizon(scheduled, now):
             continue
-        outcomes = [str(x) for x in _field(market.get("outcomes"))]
+        outcomes = [_text(x) for x in _field(market.get("outcomes"))]
         prices = [float(x) for x in _field(market.get("outcomePrices"))]
         if len(outcomes) != 2 or len(prices) != 2 or min(prices) <= 0:
             continue
         market_team_a, market_team_b = outcomes
         team_a, team_b = canonical_team(sport, market_team_a), canonical_team(sport, market_team_b)
-        game_p = model.game_probability(team_a, team_b)
+        game_p = (model.game_probability(team_a, team_b, scheduled)
+                  if sport == "nba" and isinstance(model, NbaModel)
+                  else model.game_probability(team_a, team_b))
         best_of = 1
         if sport == "lol":
             title = str(event.get("title") or "")
@@ -75,7 +94,9 @@ def analyze_sport(sport: str, model: EloModel, evaluation: dict, events: list[di
             available_size=float(market.get("liquidity") or 0), estimated_cost=estimated_cost,
             trading_enabled=money_ok and not started,
         )
-        reasons = model.explain(team_a, team_b)
+        reasons = (model.explain(team_a, team_b, scheduled)
+                   if sport == "nba" and isinstance(model, NbaModel)
+                   else model.explain(team_a, team_b))
         reasons.append(f"{market_team_a} 独立胜率 {p_a:.1%}，{market_team_b} 独立胜率 {1-p_a:.1%}")
         reasons.append("市场价格只用于估值和下注判断，不进入独立胜率模型")
         if not probability_ok:
@@ -86,8 +107,9 @@ def analyze_sport(sport: str, model: EloModel, evaluation: dict, events: list[di
             reasons.append("比赛已开始或开赛时间无法核验，禁止赛前下注")
         row = asdict(rec)
         row["generated_at"] = rec.generated_at.isoformat()
+        hours_to_start, decision_window = _timing(scheduled, now)
         row.update({
-            "sport": sport, "event": event.get("title"),
+            "sport": sport, "event": _text(event.get("title") or ""),
             "scheduled_start": scheduled.isoformat() if scheduled else None,
             "market_probability": prices[side], "execution_price": ask,
             "edge": rec.decision_probability - ask - estimated_cost,
@@ -95,6 +117,8 @@ def analyze_sport(sport: str, model: EloModel, evaluation: dict, events: list[di
             "real_money_approved": money_ok,
             "market_started": started,
             "market_comparison_valid": not started,
+            "hours_to_start": hours_to_start,
+            "decision_window": decision_window,
             "reasons": reasons + list(rec.reasons),
         })
         if started:
@@ -118,16 +142,14 @@ def _roster_fresh(last_games: dict[str, str], teams: tuple[str, str], now: datet
 
 def _market_rows(events: list[dict], now: datetime) -> list[tuple[dict, dict, datetime | None, list[str], list[float]]]:
     result = []
-    zone = ZoneInfo(os.getenv("REPORT_TIMEZONE", "Asia/Shanghai"))
-    local_day = now.astimezone(zone).date()
     for event in events:
         market = _main_market(event)
         if not market:
             continue
         scheduled = _start(market)
-        if scheduled and scheduled.astimezone(zone).date() != local_day:
+        if not _in_horizon(scheduled, now):
             continue
-        outcomes = [str(x) for x in _field(market.get("outcomes"))]
+        outcomes = [_text(x) for x in _field(market.get("outcomes"))]
         prices = [float(x) for x in _field(market.get("outcomePrices"))]
         if len(outcomes) == 2 and len(prices) == 2 and min(prices) > 0:
             result.append((event, market, scheduled, outcomes, prices))
@@ -158,8 +180,10 @@ def _research_row(sport: str, event: dict, market: dict, scheduled: datetime | N
         reasons.append("比赛已开始或开赛时间无法核验，禁止赛前下注。")
     row = asdict(rec)
     row["generated_at"] = rec.generated_at.isoformat()
+    assert scheduled is not None
+    hours_to_start, decision_window = _timing(scheduled, now)
     row.update({
-        "sport": sport, "event": event.get("title"),
+        "sport": sport, "event": _text(event.get("title") or ""),
         "scheduled_start": scheduled.isoformat() if scheduled else None,
         "market_probability": prices[side], "execution_price": ask,
         "edge": rec.decision_probability - ask - estimated_cost,
@@ -167,6 +191,8 @@ def _research_row(sport: str, event: dict, market: dict, scheduled: datetime | N
         "real_money_approved": money_ok,
         "market_started": started,
         "market_comparison_valid": not started,
+        "hours_to_start": hours_to_start,
+        "decision_window": decision_window,
         "reasons": reasons + list(rec.reasons),
     })
     if started:
@@ -244,6 +270,8 @@ def run_all(model_dir: str | Path, output: str | Path, *, now: datetime | None =
             model, evaluation = load_cs2(path)
         elif sport == "lol":
             model, evaluation = load_lol_meta(path)
+        elif sport == "nba":
+            model, evaluation = load_nba(path)
         else:
             model, evaluation = load_model(path)
         events = client.events_by_tag(tag, limit=100)

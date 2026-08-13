@@ -1,36 +1,36 @@
 {
   "model": {
     "ratings": {
-      "Cleveland Cavaliers": 1592.9994518860342,
-      "Boston Celtics": 1635.3329160249373,
-      "Dallas Mavericks": 1354.557935906616,
-      "Washington Wizards": 1227.8480997515087,
-      "Portland Trail Blazers": 1522.6593450809369,
-      "Houston Rockets": 1587.2221213953528,
-      "Los Angeles Lakers": 1608.9618743458184,
-      "Los Angeles Clippers": 1550.2195669625994,
-      "Atlanta Hawks": 1562.5791007733715,
-      "Indiana Pacers": 1327.4258482574876,
-      "Orlando Magic": 1553.9867108025794,
-      "Philadelphia 76ers": 1530.0141213032248,
-      "Toronto Raptors": 1530.936949473346,
-      "Charlotte Hornets": 1587.602271283287,
-      "Miami Heat": 1502.0106173071595,
-      "New York Knicks": 1743.7681538602292,
-      "Memphis Grizzlies": 1291.2494122269875,
-      "Detroit Pistons": 1630.8943619037066,
-      "Minnesota Timberwolves": 1601.2764007906328,
-      "Brooklyn Nets": 1282.0901108622402,
-      "Oklahoma City Thunder": 1756.7107734372476,
-      "Sacramento Kings": 1357.8123169746623,
-      "San Antonio Spurs": 1709.287561063617,
-      "New Orleans Pelicans": 1387.1240175153034,
-      "Denver Nuggets": 1623.8549148008483,
-      "Utah Jazz": 1279.174766496769,
-      "Golden State Warriors": 1418.338219842064,
-      "Phoenix Suns": 1495.3131139677864,
-      "Chicago Bulls": 1353.6972387904118,
-      "Milwaukee Bucks": 1395.0517069132368
+      "Cleveland Cavaliers": 1594.6457627085167,
+      "Boston Celtics": 1636.7021303091115,
+      "Dallas Mavericks": 1365.9315292987862,
+      "Washington Wizards": 1237.7159855575853,
+      "Portland Trail Blazers": 1515.7138718099252,
+      "Houston Rockets": 1584.3421049133185,
+      "Los Angeles Lakers": 1608.3730041052868,
+      "Los Angeles Clippers": 1548.3470626321719,
+      "Atlanta Hawks": 1553.7746914671611,
+      "Indiana Pacers": 1338.9471322857796,
+      "Orlando Magic": 1548.4623000222787,
+      "Philadelphia 76ers": 1524.324761754314,
+      "Toronto Raptors": 1527.2896362328163,
+      "Charlotte Hornets": 1563.0811365652028,
+      "Miami Heat": 1499.6260269372494,
+      "New York Knicks": 1721.309188147859,
+      "Memphis Grizzlies": 1314.469894084361,
+      "Detroit Pistons": 1626.8633467812108,
+      "Minnesota Timberwolves": 1595.1946943694502,
+      "Brooklyn Nets": 1287.0427132039315,
+      "Oklahoma City Thunder": 1750.611862207478,
+      "Sacramento Kings": 1359.8675182997474,
+      "San Antonio Spurs": 1695.8645330876006,
+      "New Orleans Pelicans": 1388.1161977309941,
+      "Denver Nuggets": 1616.7254449068437,
+      "Utah Jazz": 1287.5883401840863,
+      "Golden State Warriors": 1433.0190558817067,
+      "Phoenix Suns": 1499.5956732900577,
+      "Chicago Bulls": 1370.1607283308003,
+      "Milwaukee Bucks": 1406.2936728943682
     },
     "games": {
       "Cleveland Cavaliers": 1369,
@@ -64,33 +64,82 @@
       "Chicago Bulls": 1351,
       "Milwaukee Bucks": 1358
     },
+    "last_game_dates": {
+      "Cleveland Cavaliers": "2026-05-25T00:00:00+00:00",
+      "Boston Celtics": "2026-05-02T00:00:00+00:00",
+      "Dallas Mavericks": "2026-04-12T00:00:00+00:00",
+      "Washington Wizards": "2026-04-12T00:00:00+00:00",
+      "Portland Trail Blazers": "2026-04-28T00:00:00+00:00",
+      "Houston Rockets": "2026-05-01T00:00:00+00:00",
+      "Los Angeles Lakers": "2026-05-11T00:00:00+00:00",
+      "Los Angeles Clippers": "2026-04-12T00:00:00+00:00",
+      "Atlanta Hawks": "2026-04-30T00:00:00+00:00",
+      "Indiana Pacers": "2026-04-12T00:00:00+00:00",
+      "Orlando Magic": "2026-05-03T00:00:00+00:00",
+      "Philadelphia 76ers": "2026-05-10T00:00:00+00:00",
+      "Toronto Raptors": "2026-05-03T00:00:00+00:00",
+      "Charlotte Hornets": "2026-04-12T00:00:00+00:00",
+      "Miami Heat": "2026-04-12T00:00:00+00:00",
+      "New York Knicks": "2026-06-13T00:00:00+00:00",
+      "Memphis Grizzlies": "2026-04-12T00:00:00+00:00",
+      "Detroit Pistons": "2026-05-17T00:00:00+00:00",
+      "Minnesota Timberwolves": "2026-05-15T00:00:00+00:00",
+      "Brooklyn Nets": "2026-04-12T00:00:00+00:00",
+      "Oklahoma City Thunder": "2026-05-30T00:00:00+00:00",
+      "Sacramento Kings": "2026-04-12T00:00:00+00:00",
+      "San Antonio Spurs": "2026-06-13T00:00:00+00:00",
+      "New Orleans Pelicans": "2026-04-12T00:00:00+00:00",
+      "Denver Nuggets": "2026-04-30T00:00:00+00:00",
+      "Utah Jazz": "2026-04-12T00:00:00+00:00",
+      "Golden State Warriors": "2026-04-12T00:00:00+00:00",
+      "Phoenix Suns": "2026-04-27T00:00:00+00:00",
+      "Chicago Bulls": "2026-04-12T00:00:00+00:00",
+      "Milwaukee Bucks": "2026-04-12T00:00:00+00:00"
+    },
     "trained_through": "2026-06-13",
     "samples": 20423,
-    "k_factor": 24.0,
+    "k_factor": 20.0,
+    "home_advantage": 60.0,
+    "rest_day_value": 16.0,
+    "seasonal_regression": 0.15,
     "base_rating": 1500.0
   },
   "evaluation": {
     "protocol": {
-      "train": "<= 2021",
+      "train": "<=2021",
       "validation": "2022-2023",
-      "final_test": "2024-2025",
-      "final_test_is_locked": true
+      "retrospective_test": "2024-2025",
+      "new_unseen_lockbox": false
     },
-    "train_samples": 14725,
+    "selected_parameters": {
+      "k_factor": 20.0,
+      "home_advantage": 60.0,
+      "rest_day_value": 16.0
+    },
+    "data": {
+      "samples": 20423,
+      "train_samples": 14725,
+      "validation_samples": 2413,
+      "test_samples": 2468
+    },
     "validation": {
       "samples": 2413,
-      "brier": 0.22765361211828286,
-      "log_loss": 0.6479537518178565,
-      "accuracy": 0.6249481972648155
+      "brier": 0.22133525235319176,
+      "log_loss": 0.63364163337636,
+      "accuracy": 0.646083713220058
     },
-    "final_test": {
+    "retrospective_test": {
       "samples": 2468,
-      "brier": 0.2204576118664235,
-      "log_loss": 0.6304137225648381,
-      "accuracy": 0.6397893030794165
+      "brier": 0.21823400977094196,
+      "log_loss": 0.6255548771703477,
+      "accuracy": 0.6462722852512156
     },
     "approved_for_probability_use": true,
     "approved_for_real_money": false,
-    "note": "真实下注仍需另行通过带决策时点可成交赔率的样本外 ROI 验收。"
+    "limitations": [
+      "2024-2025 is retrospective because earlier baseline results were already inspected",
+      "2026 market outcomes have been inspected and cannot be reused as an unseen lockbox",
+      "injuries, confirmed starters, travel distance, and player-level strength are not included"
+    ]
   }
 }

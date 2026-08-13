@@ -82,6 +82,12 @@ class FeishuAppClient:
 
 
 def format_daily_report(report: dict[str, Any], report_date: date | None = None) -> str:
+    def percent(value: Any) -> str:
+        return "不可比较" if value is None else f"{float(value):.1%}"
+
+    def price(value: Any) -> str:
+        return "不可用" if value is None else f"{float(value):.3f}"
+
     day = report_date or (date.fromisoformat(report["report_date"]) if report.get("report_date") else date.today())
     rows = sorted(report.get("recommendations", []), key=lambda row: row.get("action") != "BET")
     bankroll = report.get("bankroll_usdc")
@@ -121,10 +127,10 @@ def format_daily_report(report: dict[str, Any], report_date: date | None = None)
         lines.extend([
             f"{marker} {index}. [{str(row.get('sport', '')).upper()}] {row.get('event', row.get('event_id', '未知赛事'))}",
             f"方向：{row.get('outcome', '-')}｜结论：{action}",
-            f"独立模型概率：{float(row.get('model_probability', 0)):.1%}｜市场概率：{float(row.get('market_probability', 0)):.1%}",
-            f"风控后概率：{float(row.get('decision_probability', row.get('model_probability', 0))):.1%}｜原始优势：{float(row.get('raw_edge', row.get('edge', 0))):.1%}",
-            f"成本后净优势：{float(row.get('edge', 0)):.1%}｜净EV：{float(row.get('expected_value', 0)):.1%}｜建议金额：{float(row.get('stake', 0)):.2f} USDC",
-            f"市场可买价：{float(row.get('execution_price', row.get('market_probability', 0))):.3f}",
+            f"独立模型概率：{percent(row.get('model_probability'))}｜市场概率：{percent(row.get('market_probability'))}",
+            f"风控后概率：{percent(row.get('decision_probability'))}｜原始优势：{percent(row.get('raw_edge'))}",
+            f"成本后净优势：{percent(row.get('edge'))}｜净EV：{percent(row.get('expected_value'))}｜建议金额：{float(row.get('stake', 0)):.2f} USDC",
+            f"市场可买价：{price(row.get('execution_price'))}",
             f"依据：{'；'.join(row.get('reasons', [])) or '无'}",
             "",
         ])

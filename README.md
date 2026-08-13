@@ -44,7 +44,9 @@ NBA/CBA 的规范输入列为 `event_id,played_at,team_a,team_b,team_a_won`。�
 
 ## 云服务器常驻运行
 
-生产环境使用一台 Linux VPS/云服务器运行 Docker 容器，不依赖本机、Codex 桌面程序或 GitHub Actions。容器默认每天北京时间 08:15 执行：加载已冻结的 NBA/LoL/CS2 模型 → 获取当天赛程与市场 → 生成报告 → 推送飞书。CBA 当前暂停；CS2 已进入研究概率推送，但 2026 市场锁箱回测未通过，因此强制 `NO_BET`。`/health` 返回最近一次运行时间和错误状态。
+服务器购买与安全配置请先阅读 [`SERVER_SETUP.md`](SERVER_SETUP.md)。当前推荐腾讯云轻量应用服务器中国香港 2核2GB、Ubuntu 24.04，先按月购买验证；不需要 GPU、域名或数据库产品。
+
+生产环境使用一台 Linux VPS/云服务器运行 Docker 容器，不依赖本机、Codex 桌面程序或 GitHub Actions。容器默认每天北京时间 06:30 执行：加载已冻结的 NBA/LoL/CS2 模型 → 获取当天赛程与市场 → 生成报告 → 推送飞书。CBA 当前暂停；CS2 已进入研究概率推送，但 2026 市场锁箱回测未通过，因此强制 `NO_BET`。`/health` 返回最近一次运行时间和错误状态。
 
 模型训练与每日预测分开：训练任务只有在获得新赛季数据后人工触发，必须先通过验证和锁箱测试，再把模型文件放入服务器 `artifacts/`。每日任务只能读取模型，不能擅自改动参数或重训。
 
@@ -58,7 +60,15 @@ docker compose up -d
 curl http://127.0.0.1:8080/health
 ```
 
-`compose.yaml` 把模型以只读方式挂载，报告和数据使用持久卷。容器异常退出后自动重启，并限制日志大小。GitHub Actions 只运行单元测试，不承担生产调度。
+`compose.yaml` 把模型以只读方式挂载，报告和数据使用持久卷。容器异常退出后自动重启，并限制日志大小。生产调度仍由腾讯云容器负责；GitHub Actions 只在 `main` 更新后运行测试并部署新版本，不承担每天的比赛扫描。
+
+云端开发通过私有 GitHub 仓库和 Codex Cloud 完成。所有修改先进入分支和 PR；合并到 `main` 后，`Deploy production` 工作流才会通过受限 SSH 密钥更新腾讯云。部署保留服务器上的 `.env`、`data/` 和前向纸面账本。GitHub `production` 环境需要配置 `DEPLOY_HOST`、`DEPLOY_USER`、`DEPLOY_SSH_KEY` 和 `DEPLOY_HOST_KEY` 四个 secrets。
+
+服务器默认每 30 分钟静默扫描未来 30 小时赛事，把完整快照写入 `data/daily/paper.db`；飞书仍在每天设定时间汇总推送。账本是追加式 SQLite：保存生成时间、距开赛小时数、T−24h/T−6h/T−1h 最近窗口、比赛、模型概率、市场价格、执行价、阵容资格、拒绝理由和动作；相同运行重试不会重复写入。查看累计前向样本：
+
+```bash
+python -m prediction_agent.cli paper-summary --paper-db data/daily/paper.db
+```
 
 ## 旧版市场锚定模型（非 LoL 生产概率）
 
@@ -69,6 +79,10 @@ The next model uses the decision-time Polymarket probability as a log-odds offse
 The first CS2 baseline reads Valve's public Regional Standings snapshots and uses only pre-match team and five-player roster identity. It trains on 2024, tunes on 2025, and keeps 2026 as a locked chronological test. Its separate Polymarket market test replays every model prediction before updating with the result and samples prices at T−24h, T−6h, and T−1h. The 2026 proxy ROI was negative at all three windows (−9.2%, −6.8%, and −8.5%), so real-money approval remains false. See `reports/CS2_历史市场锁箱回测.md`.
 
 HLTV pages are not scraped because their terms prohibit data mining/web scraping. For the next map/veto/LAN layer, the preferred source is GRID Open Access (official CS2 telemetry, application required) or a licensed commercial feed. GRID access and license approval are a data prerequisite, not a server prerequisite; never put its token in Git.
+
+## NBA market lockbox result
+
+The chronological NBA Elo baseline was joined to 1,252 of 1,334 Polymarket moneyline games. Its 2026 proxy ROI was negative at T−24h, T−6h, and T−1h (−12.3%, −5.2%, and −8.5%), and the market Brier score beat the model in every window. Real-money approval therefore remains false. Since these 2026 outcomes have now been inspected, they are diagnostic data for future model changes rather than a reusable unseen lockbox. See `reports/NBA_历史市场锁箱回测.md`.
 
 ```bash
 prediction-agent cs2-train data/external/valve_cs2_vrs

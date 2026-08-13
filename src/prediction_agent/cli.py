@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 from dataclasses import asdict
 from pathlib import Path
 
@@ -15,10 +16,13 @@ from .lol_model import evaluate_periods, evaluate_years, fit_elo, load_oracle_el
 from .lol_model import load_canonical_games
 from .sports_daily import run_all
 from .providers.polymarket import PolymarketClient
+from .paper_store import record_report, settle_pending, summary as paper_summary
 from .risk import recommend
 
 
 def main() -> None:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     parser = argparse.ArgumentParser(description="Sports market research and risk-control CLI")
     sub = parser.add_subparsers(dest="command", required=True)
     poly = sub.add_parser("polymarket", help="search active Polymarket markets")
@@ -71,9 +75,14 @@ def main() -> None:
     sport_train.add_argument("--validation-end", type=int, default=2024)
     sport_train.add_argument("--test-start", type=int, default=2025)
     sport_train.add_argument("--test-end", type=int, default=2025)
-    all_daily = sub.add_parser("daily", help="analyze today's NBA and LoL markets (CBA paused)")
+    all_daily = sub.add_parser("daily", help="analyze upcoming NBA, LoL, and CS2 markets (CBA paused)")
     all_daily.add_argument("--model-dir", default="artifacts")
     all_daily.add_argument("--output", default="reports/daily.json")
+    all_daily.add_argument("--paper-db", help="append this genuinely forward run to a SQLite ledger")
+    paper = sub.add_parser("paper-summary", help="summarize the append-only forward prediction ledger")
+    paper.add_argument("--paper-db", default="data/daily/paper.db")
+    settle = sub.add_parser("paper-settle", help="settle prior ledger events from Polymarket")
+    settle.add_argument("--paper-db", default="data/daily/paper.db")
     args = parser.parse_args()
     if args.command == "polymarket":
         rows = PolymarketClient().search_sports(args.query, limit=args.limit)
@@ -135,7 +144,14 @@ def main() -> None:
         save_model(model, target, evaluation)
         print(json.dumps({"saved": str(target), "evaluation": evaluation}, ensure_ascii=False, indent=2))
     elif args.command == "daily":
-        print(json.dumps(run_all(args.model_dir, args.output), ensure_ascii=False, indent=2))
+        report = run_all(args.model_dir, args.output)
+        if args.paper_db:
+            report["paper_store"] = record_report(args.paper_db, report)
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+    elif args.command == "paper-summary":
+        print(json.dumps(paper_summary(args.paper_db), ensure_ascii=False, indent=2))
+    elif args.command == "paper-settle":
+        print(json.dumps(settle_pending(args.paper_db), ensure_ascii=False, indent=2))
     else:
         report_data = json.loads(Path(args.report).read_text(encoding="utf-8"))
         message = format_daily_report(report_data)

@@ -12,10 +12,14 @@ from zoneinfo import ZoneInfo
 
 from prediction_agent.delivery import FeishuAppClient, FeishuWebhookClient, format_daily_report
 from prediction_agent.sports_daily import run_all
+from prediction_agent.paper_store import record_report, settle_pending
 
 
 ROOT = Path(__file__).resolve().parents[1]
-STATE = {"started_at": datetime.now(timezone.utc).isoformat(), "last_run": None, "last_ok": None, "error": None}
+STATE = {"started_at": datetime.now(timezone.utc).isoformat(), "last_run": None,
+         "last_ok": None, "last_scan": None, "last_push": None,
+         "error": None, "paper_store": None, "paper_settlement": None}
+RUN_LOCK = threading.Lock()
 
 
 def _send(report: dict) -> None:
@@ -33,23 +37,30 @@ def _send(report: dict) -> None:
                     os.getenv("FEISHU_RECEIVE_ID_TYPE", "open_id")).send_text(message)
 
 
-def run_once() -> None:
-    STATE["last_run"] = datetime.now(timezone.utc).isoformat()
-    try:
-        report = run_all(ROOT / "artifacts", ROOT / "reports" / "daily.json")
-        missing = [sport for sport, status in report["sport_status"].items() if not status.get("ready")]
-        if missing:
-            raise RuntimeError("production models not ready: " + ", ".join(missing))
-        _send(report)
-        STATE.update(last_ok=datetime.now(timezone.utc).isoformat(), error=None)
-    except Exception as error:
-        STATE["error"] = repr(error)
-        raise
+def run_once(*, notify: bool = True) -> None:
+    with RUN_LOCK:
+        STATE["last_run"] = datetime.now(timezone.utc).isoformat()
+        try:
+            report = run_all(ROOT / "artifacts", ROOT / "reports" / "daily.json")
+            missing = [sport for sport, status in report["sport_status"].items() if not status.get("ready")]
+            if missing:
+                raise RuntimeError("production models not ready: " + ", ".join(missing))
+            paper_path = Path(os.getenv("PAPER_DB_PATH", str(ROOT / "data" / "daily" / "paper.db")))
+            STATE["paper_settlement"] = settle_pending(paper_path)
+            STATE["paper_store"] = record_report(paper_path, report)
+            STATE["last_scan"] = datetime.now(timezone.utc).isoformat()
+            if notify:
+                _send(report)
+                STATE["last_push"] = datetime.now(timezone.utc).isoformat()
+            STATE.update(last_ok=datetime.now(timezone.utc).isoformat(), error=None)
+        except Exception as error:
+            STATE["error"] = repr(error)
+            raise
 
 
 def _next_run(now: datetime) -> datetime:
     zone = ZoneInfo(os.getenv("REPORT_TIMEZONE", "Asia/Shanghai"))
-    hour, minute = (int(x) for x in os.getenv("DAILY_RUN_TIME", "08:15").split(":", 1))
+    hour, minute = (int(x) for x in os.getenv("DAILY_RUN_TIME", "06:30").split(":", 1))
     local = now.astimezone(zone)
     target = local.replace(hour=hour, minute=minute, second=0, microsecond=0)
     if target <= local:
@@ -74,6 +85,16 @@ def scheduler() -> None:
                 pass
 
 
+def paper_scheduler() -> None:
+    minutes = max(5, int(os.getenv("PAPER_SCAN_MINUTES", "30")))
+    while True:
+        try:
+            run_once(notify=False)
+        except Exception:
+            pass
+        time.sleep(minutes * 60)
+
+
 class Health(BaseHTTPRequestHandler):
     def do_GET(self):  # noqa: N802
         if self.path not in {"/", "/health"}:
@@ -92,6 +113,7 @@ class Health(BaseHTTPRequestHandler):
 
 def main() -> None:
     threading.Thread(target=scheduler, daemon=True).start()
+    threading.Thread(target=paper_scheduler, daemon=True).start()
     ThreadingHTTPServer(("0.0.0.0", int(os.getenv("PORT", "8080"))), Health).serve_forever()
 
 
