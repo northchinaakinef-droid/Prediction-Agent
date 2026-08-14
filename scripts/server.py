@@ -124,6 +124,7 @@ def live_scheduler() -> None:
     supervisor = LiveSupervisor(root=ROOT, on_alert=lambda alert: _send_message(format_live_alert(alert)))
     interval = max(10, int(os.getenv("LIVE_SCAN_SECONDS", "30")))
     while True:
+        scan_started = time.monotonic()
         try:
             result = supervisor.scan_once()
             STATE["live"] = result
@@ -136,7 +137,11 @@ def live_scheduler() -> None:
             LIVE_SOURCE_SIGNATURE = unavailable
         except Exception as error:
             STATE["live_error"] = repr(error)
-        time.sleep(interval)
+        time.sleep(max(1.0, interval - (time.monotonic() - scan_started)))
+
+
+def _health_ready() -> bool:
+    return STATE["error"] is None and STATE["live_error"] is None and STATE["live"] is not None
 
 
 class Health(BaseHTTPRequestHandler):
@@ -145,7 +150,7 @@ class Health(BaseHTTPRequestHandler):
             self.send_error(404)
             return
         payload = json.dumps(STATE, ensure_ascii=False).encode("utf-8")
-        self.send_response(200 if not STATE["error"] else 503)
+        self.send_response(200 if _health_ready() else 503)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
