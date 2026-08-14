@@ -9,7 +9,7 @@ from pathlib import Path
 
 from .backtest import load_csv, run_backtest
 from .cs2_model import evaluate_cs2, load_valve_vrs, save_cs2
-from .delivery import FeishuAppClient, FeishuWebhookClient, format_daily_report
+from .delivery import FeishuAppClient, FeishuWebhookClient, format_daily_post, format_daily_report
 from .next_model import DEFAULT_FEATURES, load_jsonl, walk_forward_evaluate
 from .lol_daily import run_daily
 from .lol_model import evaluate_periods, evaluate_years, fit_elo, load_oracle_elixir, save_model
@@ -196,7 +196,7 @@ def main() -> None:
                 os.environ["FEISHU_APP_ID"], os.environ["FEISHU_APP_SECRET"],
                 os.environ["FEISHU_RECEIVE_ID"], os.getenv("FEISHU_RECEIVE_ID_TYPE", "open_id"),
             )
-        result = client.send_text(message)
+        result = client.send_post(format_daily_post(report_data))
         print(json.dumps({"sent": True, "parts": len(result)}, ensure_ascii=False))
 
 

@@ -38,7 +38,8 @@ class LiveEngineTests(unittest.TestCase):
         market = MarketState("m", "A", .45, .44, .46, .02, 1000, 0, now, True)
         alert = AlertEngine().evaluate(state, probability, market, None)
         self.assertIsNotNone(alert)
-        self.assertIn("Alert Score", format_live_alert(alert))
+        self.assertIn("重要度", format_live_alert(alert))
+        self.assertIn("模型与市场分歧", format_live_alert(alert))
 
     def test_live_store_persists_snapshots_and_alert_dedupe(self):
         now = datetime.now(timezone.utc)

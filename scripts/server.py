@@ -10,7 +10,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from prediction_agent.delivery import FeishuAppClient, FeishuWebhookClient, format_daily_report, format_live_alert
+from prediction_agent.delivery import FeishuAppClient, FeishuWebhookClient, format_daily_post, format_live_alert
 from prediction_agent.live_runtime import LiveSupervisor
 from prediction_agent.sports_daily import run_all
 from prediction_agent.paper_store import record_report, settle_pending
@@ -26,10 +26,10 @@ LIVE_SOURCE_SIGNATURE = None
 
 
 def _send(report: dict) -> None:
-    message = format_daily_report(report)
+    post = format_daily_post(report)
     if os.getenv("FEISHU_WEBHOOK_URL"):
         FeishuWebhookClient(os.environ["FEISHU_WEBHOOK_URL"],
-                            os.getenv("FEISHU_WEBHOOK_SECRET") or None).send_text(message)
+                            os.getenv("FEISHU_WEBHOOK_SECRET") or None).send_post(post)
         return
     required = ("FEISHU_APP_ID", "FEISHU_APP_SECRET", "FEISHU_RECEIVE_ID")
     missing = [name for name in required if not os.getenv(name)]
