@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -11,6 +12,16 @@ from prediction_agent.providers.live_data import LiveState
 
 
 class LiveRuntimeTests(unittest.TestCase):
+    def test_stale_daily_report_is_not_used_for_live_alerts(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "reports").mkdir()
+            (root / "reports" / "daily.json").write_text(json.dumps({
+                "report_date": "2020-01-01", "recommendations": [{"sport": "lol"}],
+            }), encoding="utf-8")
+            supervisor = LiveSupervisor(root=root)
+            self.assertEqual(supervisor._report(), {})
+
     def test_lol_post_draft_probability_does_not_require_in_game_fields(self):
         state = LiveState(
             "draft", "g1", "lol", datetime.now(timezone.utc), "LIVE", "T1", "Gen.G",
