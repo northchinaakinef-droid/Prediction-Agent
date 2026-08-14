@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 from prediction_agent.providers.live_data import (
     Bo3Cs2Provider, DataSourceUnavailable, EspnNbaProvider, GridOpenAccessProvider,
-    PandaScoreProvider, SportSrcNbaProvider, TheSportsDbNbaProvider,
+    LeaguepediaDraftProvider, PandaScoreProvider, SportSrcNbaProvider, TheSportsDbNbaProvider,
 )
 
 
@@ -33,6 +33,19 @@ class LiveDataProviderTests(unittest.TestCase):
         with patch.dict(os.environ, {}, clear=True):
             with self.assertRaisesRegex(DataSourceUnavailable, "PANDASCORE_TOKEN"):
                 PandaScoreProvider(token=None).live("cs2")
+
+    @patch("prediction_agent.providers.live_data._get_json")
+    def test_leaguepedia_parses_completed_draft(self, get_json):
+        get_json.return_value = {"cargoquery": [{"title": {
+            "Team1": "T1", "Team2": "Gen.G", "Tournament": "LCK 2026",
+            "GameId": "g1", "Winner": "", "Team1Picks": "A,B,C,D,E", "Team2Picks": "F,G,H,I,J",
+        }}, {"title": {
+            "Team1": "T1", "Team2": "Gen.G", "Tournament": "LCK 2026",
+            "GameId": "older", "Winner": "1", "Team1Picks": "K,L,M,N,O", "Team2Picks": "P,Q,R,S,T",
+        }}]}
+        rows = LeaguepediaDraftProvider().live()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0].features["champions_a"], ["A", "B", "C", "D", "E"])
 
     @patch("prediction_agent.providers.live_data._get_json")
     def test_thesportsdb_filters_out_non_nba_basketball(self, get_json):

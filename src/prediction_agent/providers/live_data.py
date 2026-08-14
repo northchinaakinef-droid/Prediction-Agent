@@ -273,6 +273,50 @@ class PandaScoreProvider:
         return rows
 
 
+class LeaguepediaDraftProvider:
+    """Public Cargo fallback for completed champion drafts; updates can be editor-delayed."""
+
+    base = "https://lol.fandom.com/api.php"
+
+    @staticmethod
+    def _picks(value: object) -> list[str]:
+        return [item.strip() for item in str(value or "").split(",") if item.strip()]
+
+    def live(self) -> list[LiveState]:
+        now = datetime.now(timezone.utc)
+        since = (now - timedelta(hours=10)).strftime("%Y-%m-%d %H:%M:%S")
+        payload = _get_json(self.base, params={
+            "action": "cargoquery", "format": "json", "limit": 100,
+            "tables": "ScoreboardGames=SG",
+            "fields": "SG.Team1,SG.Team2,SG.DateTime_UTC,SG.Team1Picks,SG.Team2Picks,SG.GameId,SG.Tournament,SG.Winner",
+            "where": f"SG.DateTime_UTC >= '{since}'", "order_by": "SG.DateTime_UTC DESC",
+        }, headers={"User-Agent": "PredictionAgent/0.2"})
+        targets = tuple(value.strip().casefold() for value in os.getenv(
+            "LOL_TARGET_LEAGUES", "LPL,LCK,LEC,LCS,LTA,LCP,MSI,Worlds,First Stand"
+        ).split(",") if value.strip())
+        rows = []
+        for result in payload.get("cargoquery", []):
+            item = result.get("title", {})
+            tournament = str(item.get("Tournament") or "")
+            if targets and not any(target in tournament.casefold() for target in targets):
+                continue
+            champions_a, champions_b = self._picks(item.get("Team1Picks")), self._picks(item.get("Team2Picks"))
+            if len(champions_a) != 5 or len(champions_b) != 5:
+                continue
+            finished = str(item.get("Winner") or "") in {"1", "2"}
+            rows.append(LiveState(
+                "leaguepedia", str(item.get("GameId") or f"{item.get('Team1')}:{item.get('Team2')}"),
+                "lol", now, "FINISHED" if finished else "LIVE", str(item.get("Team1") or ""),
+                str(item.get("Team2") or ""), features={"champions_a": champions_a, "champions_b": champions_b,
+                                                          "draft_source_delayed": True}, finished=finished,
+            ))
+        latest = {}
+        for row in rows:
+            key = tuple(sorted((row.team_a.casefold(), row.team_b.casefold())))
+            latest.setdefault(key, row)
+        return list(latest.values())
+
+
 class GridOpenAccessProvider:
     central_url = "https://api-op.grid.gg/central-data/graphql"
     state_url = "https://api-op.grid.gg/live-data-feed/series-state/graphql"

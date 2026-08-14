@@ -99,6 +99,12 @@ class DynamicProbabilityEngine:
                 reasons.append(f"BP/player-champion model changed prior {prior:.1%}→{draft_probability:.1%}")
             required = ("gold_a", "gold_b", "kills_a", "kills_b", "towers_a", "towers_b")
             if any(f.get(name) is None for name in required):
+                if f.get("post_draft_probability") is not None:
+                    current = _sigmoid(score)
+                    return ProbabilityUpdate(
+                        prior, current, current - prior, "LOL_POST_DRAFT_MODEL",
+                        "UNVALIDATED_RESEARCH_ONLY", reasons,
+                    )
                 return ProbabilityUpdate(prior, None, None, "UNAVAILABLE", "MISSING_LIVE_FEATURES",
                                          ["LoL gold/kills/towers live fields are incomplete"])
             gold = float(f["gold_a"]) - float(f["gold_b"])
@@ -260,6 +266,11 @@ class LiveStore:
                               (dedupe_key,)).fetchall()
         return bool(rows and datetime.fromisoformat(rows[0]["observed_at"]).timestamp() >= cutoff)
 
+    def alert_exists(self, dedupe_key: str) -> bool:
+        with self.connect() as db:
+            row = db.execute("SELECT 1 FROM live_alerts WHERE dedupe_key=? LIMIT 1", (dedupe_key,)).fetchone()
+        return row is not None
+
     def save_alert(self, alert: LiveAlert) -> None:
         with self.connect() as db:
             db.execute("INSERT INTO live_alerts(dedupe_key,observed_at,alert_json) VALUES(?,?,?)",
@@ -345,7 +356,7 @@ class LiveAnalysisEngine:
         self.alerts = AlertEngine()
 
     def process(self, states: list[LiveState], market_events: dict[str, list[dict]],
-                priors: dict[str, float]) -> list[LiveAlert]:
+                priors: dict[str, float], *, alert_sports: set[str] | None = None) -> list[LiveAlert]:
         emitted = []
         for state in states:
             key = match_key(state)
@@ -354,7 +365,8 @@ class LiveAnalysisEngine:
             market = self.market.snapshot(state, market_events.get(state.sport, []))
             alert = self.alerts.evaluate(state, probability, market, previous)
             self.store.save(key, state, probability, market)
-            if alert and not self.store.alert_recent(alert.dedupe_key, 10 * 60):
+            alerts_enabled = alert_sports is None or state.sport in alert_sports
+            if alert and alerts_enabled and not self.store.alert_recent(alert.dedupe_key, 10 * 60):
                 self.store.save_alert(alert)
                 emitted.append(alert)
         return emitted

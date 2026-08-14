@@ -279,10 +279,14 @@ def format_live_alert(alert: LiveAlert | dict[str, Any]) -> str:
     category = {
         "MARKET_ANOMALY": "盘口异常", "MAJOR_EVENT": "重大事件", "PROBABILITY_CHANGE": "概率变化",
         "NEWS_ALERT": "阵容 / 新闻异常",
+        "PREMATCH_ANALYSIS": "赛前分析", "DRAFT_ANALYSIS": "BP 完成分析",
+        "MATCH_START": "比赛开始", "PERIOD_UPDATE": "节次更新", "CLUTCH_TIME": "关键时段",
+        "MATCH_FINISHED": "比赛结束", "WATCHER_MISSING": "监控缺失",
+        "MONITORING_RECOVERY": "监控恢复",
     }.get(str(row.get("category")), str(row.get("category")))
     return "\n".join([
         f"{icon}【{category}】",
-        f"{_sport_name(row.get('sport'))}｜{row.get('title')}",
+        f"{_sport_name(row.get('sport'))}｜{_event_name(row.get('title'))}",
         f"重要度：{float(row.get('alert_score', 0)):.0f}/100｜级别：{severity}",
         _zh_live_text(row.get("summary")),
         "关键原因：",

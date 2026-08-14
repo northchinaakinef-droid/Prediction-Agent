@@ -23,6 +23,14 @@ STATE = {"started_at": datetime.now(timezone.utc).isoformat(), "last_run": None,
          "live": None, "live_error": None}
 RUN_LOCK = threading.Lock()
 LIVE_SOURCE_SIGNATURE = None
+SOURCE_LABELS = {
+    "nba_official": "NBA 官方比分", "espn_nba": "ESPN NBA",
+    "riot_esports": "LoL 官方 BP", "pandascore_lol": "PandaScore LoL",
+    "leaguepedia_bp": "Leaguepedia BP", "bo3_cs2": "BO3.gg CS2",
+    "grid_cs2": "GRID CS2", "pandascore_cs2": "PandaScore CS2",
+    "news_rss": "新闻源", "polymarket_nba": "Polymarket NBA",
+    "polymarket_lol": "Polymarket LoL", "polymarket_cs2": "Polymarket CS2",
+}
 
 
 def _send(report: dict) -> None:
@@ -37,7 +45,7 @@ def _send(report: dict) -> None:
         raise RuntimeError("missing Feishu configuration: " + ", ".join(missing))
     FeishuAppClient(os.environ["FEISHU_APP_ID"], os.environ["FEISHU_APP_SECRET"],
                     os.environ["FEISHU_RECEIVE_ID"],
-                    os.getenv("FEISHU_RECEIVE_ID_TYPE", "open_id")).send_text(message)
+                    os.getenv("FEISHU_RECEIVE_ID_TYPE", "open_id")).send_post(post)
 
 
 def _send_message(message: str) -> None:
@@ -122,7 +130,8 @@ def live_scheduler() -> None:
             STATE["live_error"] = None
             unavailable = tuple(sorted(result.get("unavailable_sources", [])))
             if unavailable and unavailable != LIVE_SOURCE_SIGNATURE:
-                _send_message("🚨【实时数据源异常】\nDATA_UNAVAILABLE：" + "、".join(unavailable) +
+                _send_message("🚨【实时数据源异常】\n当前不可用：" +
+                              "、".join(SOURCE_LABELS.get(name, name) for name in unavailable) +
                               "\n系统不会把数据不可用解释为没有比赛。")
             LIVE_SOURCE_SIGNATURE = unavailable
         except Exception as error:

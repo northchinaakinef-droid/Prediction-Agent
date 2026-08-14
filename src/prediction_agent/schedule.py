@@ -17,7 +17,7 @@ from .entities import canonical_team, normalized_name
 
 
 REPORT_ZONE = "Asia/Singapore"
-TARGET_LOL_LEAGUES = ("LPL", "LCK", "LEC", "LTA", "MSI", "WORLDS", "FIRST STAND")
+TARGET_LOL_LEAGUES = ("LPL", "LCK", "LEC", "LCS", "LTA", "LCP", "MSI", "WORLDS", "FIRST STAND")
 
 
 def _fetch_text(url: str, timeout: float = 30) -> str:
