@@ -11,6 +11,7 @@ from .live_engine import LiveAlert, LiveAnalysisEngine, LiveStore, match_key
 from .providers.live_data import (
     Bo3Cs2Provider, DataSourceUnavailable, EspnNbaProvider, GridOpenAccessProvider,
     LeaguepediaDraftProvider, NbaOfficialProvider, PandaScoreProvider, RiotEsportsProvider,
+    TheSportsDbNbaProvider,
 )
 from .providers.polymarket import PolymarketClient
 from .providers.news import RssNewsProvider
@@ -180,6 +181,7 @@ class LiveSupervisor:
         groups = [
             ("nba_official", lambda: NbaOfficialProvider().live()),
             ("espn_nba", lambda: EspnNbaProvider().live(today)),
+            ("thesportsdb_nba", lambda: TheSportsDbNbaProvider().live(today)),
         ]
         panda = PandaScoreProvider()
         grid = GridOpenAccessProvider()

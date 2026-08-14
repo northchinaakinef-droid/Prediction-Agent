@@ -82,9 +82,11 @@ class LiveState:
 class NbaOfficialProvider:
     schedule_url = "https://cdn.nba.com/static/json/staticData/scheduleLeagueV2_1.json"
     scoreboard_url = "https://cdn.nba.com/static/json/liveData/scoreboard/todaysScoreboard_00.json"
+    headers = {"Referer": "https://www.nba.com/", "Origin": "https://www.nba.com",
+               "Accept-Language": "en-US,en;q=0.9"}
 
     def schedule(self, day: date) -> list[DiscoveredEvent]:
-        payload = _get_json(self.schedule_url)
+        payload = _get_json(self.schedule_url, headers=self.headers)
         rows = []
         for block in payload.get("leagueSchedule", {}).get("gameDates", []):
             for game in block.get("games", []):
@@ -99,7 +101,7 @@ class NbaOfficialProvider:
         return rows
 
     def live(self) -> list[LiveState]:
-        payload = _get_json(self.scoreboard_url)
+        payload = _get_json(self.scoreboard_url, headers=self.headers)
         now = datetime.now(timezone.utc)
         states = []
         for game in payload.get("scoreboard", {}).get("games", []):
@@ -124,6 +126,8 @@ class NbaOfficialProvider:
 
 class EspnNbaProvider:
     base = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard"
+    headers = {"Referer": "https://www.espn.com/", "Origin": "https://www.espn.com",
+               "Accept-Language": "en-US,en;q=0.9"}
 
     def schedule(self, day: date) -> list[DiscoveredEvent]:
         rows = []
@@ -131,7 +135,8 @@ class EspnNbaProvider:
         # dates, then let the caller select the Asia/Singapore natural day.
         for offset in (-1, 0, 1):
             query_day = day + timedelta(days=offset)
-            payload = _get_json(self.base, params={"dates": query_day.strftime("%Y%m%d"), "limit": 100})
+            payload = _get_json(self.base, params={"dates": query_day.strftime("%Y%m%d"), "limit": 100},
+                                headers=self.headers)
             for event in payload.get("events", []):
                 competition = event["competitions"][0]
                 teams = {row["homeAway"]: row for row in competition["competitors"]}
@@ -145,7 +150,7 @@ class EspnNbaProvider:
 
     def live(self, day: date | None = None) -> list[LiveState]:
         day = day or datetime.now(timezone.utc).date()
-        payload = _get_json(self.base, params={"dates": day.strftime("%Y%m%d"), "limit": 100})
+        payload = _get_json(self.base, params={"dates": day.strftime("%Y%m%d"), "limit": 100}, headers=self.headers)
         now = datetime.now(timezone.utc)
         states = []
         for event in payload.get("events", []):
@@ -187,6 +192,31 @@ class TheSportsDbNbaProvider:
                 "thesportsdb", str(event.get("idEvent") or event.get("strEvent")), "nba", "NBA",
                 str(event.get("strAwayTeam") or ""), str(event.get("strHomeTeam") or ""), start,
                 str(event.get("strStatus") or "SCHEDULED"), event_name="NBA",
+            ))
+        return rows
+
+    def live(self, day: date | None = None) -> list[LiveState]:
+        day = day or datetime.now(ZoneInfo(os.getenv("REPORT_TIMEZONE", "Asia/Singapore"))).date()
+        payload = _get_json(self.base, params={"d": day.isoformat(), "l": "NBA"},
+                            headers={"Referer": "https://www.thesportsdb.com/", "Origin": "https://www.thesportsdb.com"})
+        now = datetime.now(timezone.utc)
+        rows = []
+        for event in payload.get("events") or []:
+            if str(event.get("strLeague") or "").strip().upper() != "NBA":
+                continue
+            status_text = str(event.get("strStatus") or event.get("strProgress") or "").casefold()
+            finished = status_text in {"ft", "finished", "match finished", "final"}
+            live = any(token in status_text for token in ("quarter", "qtr", "halftime", "in progress", "ot"))
+            away_score = event.get("intAwayScore")
+            home_score = event.get("intHomeScore")
+            rows.append(LiveState(
+                "thesportsdb", str(event.get("idEvent") or event.get("strEvent")), "nba", now,
+                "FINISHED" if finished else "LIVE" if live else "WAITING",
+                str(event.get("strAwayTeam") or ""), str(event.get("strHomeTeam") or ""),
+                float(away_score) if away_score not in (None, "") else None,
+                float(home_score) if home_score not in (None, "") else None,
+                features={"status_text": str(event.get("strStatus") or event.get("strProgress") or "")},
+                finished=finished,
             ))
         return rows
 

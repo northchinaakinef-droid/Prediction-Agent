@@ -32,8 +32,15 @@ class ServerDeliveryTests(unittest.TestCase):
         server = load_server_module()
         server.STATE.update(error=None, live_error=None, live=None)
         self.assertFalse(server._health_ready())
-        server.STATE["live"] = {"checked_at": "2026-08-14T00:00:00+00:00"}
+        available = {name: {"available": True} for name in (
+            "thesportsdb_nba", "pandascore_lol", "leaguepedia_bp", "bo3_cs2",
+            "polymarket_nba", "polymarket_lol", "polymarket_cs2",
+        )}
+        server.STATE["live"] = {"checked_at": "2026-08-14T00:00:00+00:00", "source_status": available}
         self.assertTrue(server._health_ready())
+        available["thesportsdb_nba"]["available"] = False
+        self.assertFalse(server._health_ready())
+        available["thesportsdb_nba"]["available"] = True
         server.STATE["live_error"] = "source loop crashed"
         self.assertFalse(server._health_ready())
 
