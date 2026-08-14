@@ -1,0 +1,16 @@
+[
+  {"sport":"lol","team_id":"T1","canonical_name":"T1","aliases":["T1 Esports","SK Telecom T1","SKT T1"],"league":"LCK","region":"KR"},
+  {"sport":"lol","team_id":"DK","canonical_name":"Dplus KIA","aliases":["DK","DWG KIA","DAMWON Gaming","Dplus Kia"],"league":"LCK","region":"KR"},
+  {"sport":"lol","team_id":"NS","canonical_name":"Nongshim RedForce","aliases":["Nongshim Red Force","Nongshim","NS RedForce"],"league":"LCK","region":"KR"},
+  {"sport":"lol","team_id":"BRO","canonical_name":"HANJIN BRION","aliases":["BRION","OKSavingsBank BRION","Fredit BRION","Hanwha BRION"],"league":"LCK","region":"KR"},
+  {"sport":"lol","team_id":"EDG","canonical_name":"Edward Gaming","aliases":["EDG","EDward Gaming"],"league":"LPL","region":"CN"},
+  {"sport":"lol","team_id":"LGD","canonical_name":"LGD Gaming","aliases":["LGD"],"league":"LPL","region":"CN"},
+  {"sport":"lol","team_id":"WE","canonical_name":"Team WE","aliases":["WE"],"league":"LPL","region":"CN"},
+  {"sport":"lol","team_id":"TES","canonical_name":"Top Esports","aliases":["TES"],"league":"LPL","region":"CN"},
+  {"sport":"lol","team_id":"AL","canonical_name":"Anyone's Legend","aliases":["Anyone’s Legend","AL"],"league":"LPL","region":"CN"},
+  {"sport":"lol","team_id":"JDG","canonical_name":"JD Gaming","aliases":["JDG","Jingdong Gaming"],"league":"LPL","region":"CN"},
+  {"sport":"lol","team_id":"SHFT","canonical_name":"Shifters","aliases":["SHFT"],"league":"LEC","region":"EU"},
+  {"sport":"lol","team_id":"SK","canonical_name":"SK Gaming","aliases":["SK"],"league":"LEC","region":"EU"},
+  {"sport":"lol","team_id":"MVK","canonical_name":"MVK Esports","aliases":["MVK"],"league":"LCP","region":"APAC"},
+  {"sport":"lol","team_id":"CFO","canonical_name":"CTBC Flying Oyster","aliases":["CFO"],"league":"LCP","region":"APAC"}
+]

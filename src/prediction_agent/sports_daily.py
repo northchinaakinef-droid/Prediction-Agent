@@ -15,6 +15,7 @@ from .nba_model import NbaModel, load_nba
 from .providers.polymarket import PolymarketClient
 from .risk import recommend
 from .entities import canonical_team
+from .schedule import LolScheduleDiscovery, append_schedule_audit, build_schedule_audit
 
 
 TAGS = {"nba": "745", "lol": "65", "cs2": "100780"}
@@ -255,11 +256,24 @@ def analyze_lol_meta(model: LolMetaModel, evaluation: dict, events: list[dict], 
     return rows
 
 
-def run_all(model_dir: str | Path, output: str | Path, *, now: datetime | None = None) -> dict:
+def run_all(model_dir: str | Path, output: str | Path, *, now: datetime | None = None,
+            report_day=None) -> dict:
     now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    zone = ZoneInfo(os.getenv("REPORT_TIMEZONE", "Asia/Singapore"))
+    report_day = report_day or now.astimezone(zone).date()
     bankroll = float(os.getenv("BANKROLL_USDC", "1000"))
     recommendations, statuses = [], {}
     client = PolymarketClient(timeout=30)
+    market_events = {sport: client.all_events_by_tag(tag, page_size=100) for sport, tag in TAGS.items()}
+    schedule_sources = LolScheduleDiscovery().discover(report_day)
+    schedule_audit = build_schedule_audit(
+        schedule_sources, market_events["lol"], report_day=report_day, now=now,
+        registry_path=os.getenv("WATCHER_REGISTRY_PATH", "data/daily/watcher_registry.json"),
+    )
+    append_schedule_audit(
+        schedule_audit,
+        os.getenv("SCHEDULE_AUDIT_LOG", f"data/daily/schedule_audits/{report_day.isoformat()}.jsonl"),
+    )
     for sport, tag in TAGS.items():
         filename = "lol_meta_model.json" if sport == "lol" else f"{sport}_model.json"
         path = Path(model_dir) / filename
@@ -274,7 +288,7 @@ def run_all(model_dir: str | Path, output: str | Path, *, now: datetime | None =
             model, evaluation = load_nba(path)
         else:
             model, evaluation = load_model(path)
-        events = client.events_by_tag(tag, limit=100)
+        events = market_events[sport]
         if sport == "cs2":
             sport_rows = analyze_cs2(model, evaluation, events, now=now, bankroll=bankroll)
         elif sport == "lol":
@@ -292,10 +306,11 @@ def run_all(model_dir: str | Path, output: str | Path, *, now: datetime | None =
             "today_probability_eligible": sum(row["probability_eligible"] for row in sport_rows),
             "today_bet_candidates": sum(row["action"] == "BET" for row in sport_rows),
         }
-    zone = ZoneInfo(os.getenv("REPORT_TIMEZONE", "Asia/Shanghai"))
     report = {
-        "report_date": now.astimezone(zone).date().isoformat(), "generated_at": now.isoformat(),
+        "report_date": report_day.isoformat(), "generated_at": now.isoformat(),
         "bankroll_usdc": bankroll, "recommendations": recommendations, "sport_status": statuses,
+        "schedule_coverage": {"lol": schedule_audit},
+        "data_incomplete": schedule_audit["data_incomplete"],
         "risk_notes": ["NBA、LoL、CS2 分别训练和验收；CBA 已暂停。历史可成交赔率 ROI 验收前均保持 NO_BET。"],
     }
     Path(output).parent.mkdir(parents=True, exist_ok=True)

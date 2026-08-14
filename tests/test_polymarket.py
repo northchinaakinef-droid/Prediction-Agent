@@ -27,6 +27,16 @@ class PolymarketClientTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             PolymarketClient().batch_price_history([{}] * 21)
 
+    @patch("prediction_agent.providers.polymarket.get_json")
+    def test_all_events_by_tag_paginates_until_short_page(self, get_json):
+        get_json.side_effect = [
+            [{"id": str(index)} for index in range(100)],
+            [{"id": "100"}, {"id": "101"}],
+        ]
+        rows = PolymarketClient().all_events_by_tag("65")
+        self.assertEqual(len(rows), 102)
+        self.assertEqual(get_json.call_args_list[1].args[1]["offset"], 100)
+
 
 if __name__ == "__main__":
     unittest.main()

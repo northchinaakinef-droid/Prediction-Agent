@@ -59,7 +59,7 @@ def run_once(*, notify: bool = True) -> None:
 
 
 def _next_run(now: datetime) -> datetime:
-    zone = ZoneInfo(os.getenv("REPORT_TIMEZONE", "Asia/Shanghai"))
+    zone = ZoneInfo(os.getenv("REPORT_TIMEZONE", "Asia/Singapore"))
     hour, minute = (int(x) for x in os.getenv("DAILY_RUN_TIME", "06:30").split(":", 1))
     local = now.astimezone(zone)
     target = local.replace(hour=hour, minute=minute, second=0, microsecond=0)

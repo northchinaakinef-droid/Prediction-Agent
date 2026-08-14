@@ -93,15 +93,37 @@ def format_daily_report(report: dict[str, Any], report_date: date | None = None)
     bankroll = report.get("bankroll_usdc")
     bankroll_line = f"折算本金：{float(bankroll):.2f} USDC" if bankroll is not None else "折算本金：等待当日汇率"
     opportunities = sum(row.get("action") == "BET" for row in rows)
+    coverage = report.get("schedule_coverage", {})
+    expected = sum(value.get("expected", 0) for value in coverage.values())
+    watching = sum(value.get("watching", 0) for value in coverage.values())
+    incomplete = bool(report.get("data_incomplete"))
     lines = [
         f"赛事研究日报｜{day.isoformat()}",
+        "【赛事覆盖检查】",
+        *(f"{sport.upper()}：已捕获 {value.get('discovered', 0)} / 预计 {value.get('expected', 0)}｜"
+          f"市场 {value.get('market_matched', 0)}｜监控 {value.get('watching', 0)}｜"
+          f"Coverage {float(value.get('coverage', 0)):.0%}"
+          for sport, value in coverage.items()),
+        f"总赛事：已捕获 {sum(value.get('discovered', 0) for value in coverage.values())} / 预计 {expected}｜正在监控 {watching}",
+        *( ["🚨 DATA INCOMPLETE｜今日赛事存在未解释遗漏"] if incomplete else ["赛事覆盖：100% ✅"] ),
         bankroll_line,
-        f"覆盖赛事：{len(rows)} 场｜合适机会：{opportunities} 场",
+        f"已生成研究分析：{len(rows)} 场｜合适机会：{opportunities} 场",
         "风控：单笔≤0.75%｜单日≤2.5%｜单赛事≤1.0%｜回撤10%熔断",
         "",
         "仅供研究，不保证收益。请以实际可成交盘口为准。",
         "",
     ]
+    for sport, value in coverage.items():
+        if value.get("source_warning"):
+            lines.append(f"⚠️ {sport.upper()} 赛程源存在差异，已由市场层交叉验证；详见 schedule audit。")
+        for missing in value.get("missing", []):
+            lines.append(
+                f"遗漏：{missing.get('league')}｜{missing.get('team_a')} vs {missing.get('team_b')}｜"
+                f"阶段={missing.get('missing_stage') or missing.get('watcher_status')}｜"
+                f"原因={missing.get('missing_reason') or 'watcher unavailable'}"
+            )
+    if coverage:
+        lines.append("")
     status = report.get("model_status", {})
     if status:
         lines.extend([

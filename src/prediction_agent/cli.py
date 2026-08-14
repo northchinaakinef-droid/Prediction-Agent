@@ -79,6 +79,10 @@ def main() -> None:
     all_daily.add_argument("--model-dir", default="artifacts")
     all_daily.add_argument("--output", default="reports/daily.json")
     all_daily.add_argument("--paper-db", help="append this genuinely forward run to a SQLite ledger")
+    audit = sub.add_parser("schedule-audit", help="discover schedules, reconcile markets, and report coverage")
+    audit.add_argument("--date", help="report date in Asia/Singapore (YYYY-MM-DD)")
+    audit.add_argument("--model-dir", default="artifacts")
+    audit.add_argument("--output", default="reports/schedule_audit.json")
     paper = sub.add_parser("paper-summary", help="summarize the append-only forward prediction ledger")
     paper.add_argument("--paper-db", default="data/daily/paper.db")
     settle = sub.add_parser("paper-settle", help="settle prior ledger events from Polymarket")
@@ -148,6 +152,13 @@ def main() -> None:
         if args.paper_db:
             report["paper_store"] = record_report(args.paper_db, report)
         print(json.dumps(report, ensure_ascii=False, indent=2))
+    elif args.command == "schedule-audit":
+        from datetime import date as calendar_date
+        report_day = calendar_date.fromisoformat(args.date) if args.date else None
+        report = run_all(args.model_dir, args.output, report_day=report_day)
+        payload = json.dumps(report["schedule_coverage"], ensure_ascii=False, indent=2)
+        Path(args.output).write_text(payload, encoding="utf-8")
+        print(payload)
     elif args.command == "paper-summary":
         print(json.dumps(paper_summary(args.paper_db), ensure_ascii=False, indent=2))
     elif args.command == "paper-settle":

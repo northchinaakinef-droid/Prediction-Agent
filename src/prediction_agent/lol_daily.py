@@ -34,7 +34,7 @@ def build_lol_report(model: EloModel, evaluation: dict, events: list[dict], *,
                      now: datetime | None = None, bankroll: float = 1000.0,
                      estimated_cost: float = 0.01) -> dict:
     now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
-    report_zone = ZoneInfo(os.getenv("REPORT_TIMEZONE", "Asia/Shanghai"))
+    report_zone = ZoneInfo(os.getenv("REPORT_TIMEZONE", "Asia/Singapore"))
     report_day = now.astimezone(report_zone).date()
     rows = []
     probability_approved = bool(evaluation.get("approved_for_probability_use"))
