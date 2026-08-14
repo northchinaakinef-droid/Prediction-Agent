@@ -62,11 +62,14 @@ class LiveDataProviderTests(unittest.TestCase):
     def test_thesportsdb_live_parses_score_and_status(self, get_json):
         get_json.return_value = {"events": [{
             "idEvent": "2", "strLeague": "NBA", "strAwayTeam": "Celtics", "strHomeTeam": "Lakers",
-            "strStatus": "In Progress - 4th Quarter", "intAwayScore": "101", "intHomeScore": "99",
+            "strStatus": "In Progress", "strProgress": "Q4 01:42",
+            "intAwayScore": "101", "intHomeScore": "99",
         }]}
         rows = TheSportsDbNbaProvider().live(date(2026, 8, 14))
         self.assertEqual(rows[0].status, "LIVE")
         self.assertEqual((rows[0].score_a, rows[0].score_b), (101, 99))
+        self.assertEqual(rows[0].features["period"], 4)
+        self.assertEqual(rows[0].features["game_clock_seconds"], 102)
 
     @patch("prediction_agent.providers.live_data._get_json")
     def test_bo3_schedule_filters_to_configured_tiers(self, get_json):

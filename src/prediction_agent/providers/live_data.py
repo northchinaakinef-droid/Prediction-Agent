@@ -204,9 +204,18 @@ class TheSportsDbNbaProvider:
         for event in payload.get("events") or []:
             if str(event.get("strLeague") or "").strip().upper() != "NBA":
                 continue
-            status_text = str(event.get("strStatus") or event.get("strProgress") or "").casefold()
-            finished = status_text in {"ft", "finished", "match finished", "final"}
-            live = any(token in status_text for token in ("quarter", "qtr", "halftime", "in progress", "ot"))
+            display_status = " ".join(str(value) for value in (
+                event.get("strStatus"), event.get("strProgress")
+            ) if value).strip()
+            status_text = display_status.casefold()
+            finished = (status_text in {"ft", "finished", "match finished", "final"} or
+                        "match finished" in status_text or re.search(r"\bfinal\b", status_text) is not None)
+            live = (any(token in status_text for token in ("quarter", "qtr", "halftime", "in progress", "ot")) or
+                    re.search(r"\bq[1-4]\b", status_text) is not None)
+            period_match = re.search(r"\bq([1-4])\b|\b([1-4])(?:st|nd|rd|th)?\s+(?:quarter|qtr)\b", status_text)
+            period = int(next(value for value in period_match.groups() if value)) if period_match else 0
+            clock_match = re.search(r"\b(\d{1,2}):(\d{2})\b", status_text)
+            clock = int(clock_match.group(1)) * 60 + int(clock_match.group(2)) if clock_match else 0
             away_score = event.get("intAwayScore")
             home_score = event.get("intHomeScore")
             rows.append(LiveState(
@@ -215,7 +224,8 @@ class TheSportsDbNbaProvider:
                 str(event.get("strAwayTeam") or ""), str(event.get("strHomeTeam") or ""),
                 float(away_score) if away_score not in (None, "") else None,
                 float(home_score) if home_score not in (None, "") else None,
-                features={"status_text": str(event.get("strStatus") or event.get("strProgress") or "")},
+                period=str(period or ""), clock_seconds=float(clock) if clock else None,
+                features={"status_text": display_status, "period": period, "game_clock_seconds": clock},
                 finished=finished,
             ))
         return rows
