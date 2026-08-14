@@ -13,8 +13,15 @@ from .lol_meta_model import LolDraftGame, LolMetaModel, load_lol_meta
 from .lol_model import EloModel, load_model, series_probability
 from .nba_model import NbaModel, load_nba
 from .providers.polymarket import PolymarketClient
+from .providers.live_data import (
+    Bo3Cs2Provider, EsportAgendaCs2Provider, EspnNbaProvider, GridOpenAccessProvider, NbaOfficialProvider,
+    PandaScoreProvider, SportSrcNbaProvider, TheSportsDbNbaProvider,
+)
 from .risk import recommend
 from .entities import canonical_team
+from .schedule import (
+    LolScheduleDiscovery, SourceResult, append_schedule_audit, build_schedule_audit, make_match,
+)
 
 
 TAGS = {"nba": "745", "lol": "65", "cs2": "100780"}
@@ -255,11 +262,70 @@ def analyze_lol_meta(model: LolMetaModel, evaluation: dict, events: list[dict], 
     return rows
 
 
-def run_all(model_dir: str | Path, output: str | Path, *, now: datetime | None = None) -> dict:
+def run_all(model_dir: str | Path, output: str | Path, *, now: datetime | None = None,
+            report_day=None) -> dict:
     now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    zone = ZoneInfo(os.getenv("REPORT_TIMEZONE", "Asia/Singapore"))
+    report_day = report_day or now.astimezone(zone).date()
     bankroll = float(os.getenv("BANKROLL_USDC", "1000"))
     recommendations, statuses = [], {}
     client = PolymarketClient(timeout=30)
+    market_events = {sport: client.all_events_by_tag(tag, page_size=100) for sport, tag in TAGS.items()}
+    market_search = lambda item: client.public_search(f"{item.team_a} {item.team_b}")
+    lol_sources = LolScheduleDiscovery().discover(report_day)
+    lol_audit = build_schedule_audit(
+        lol_sources, market_events["lol"], report_day=report_day, now=now,
+        registry_path=os.getenv("WATCHER_REGISTRY_PATH", "data/daily/watcher_registry.json"),
+        market_search=market_search,
+    )
+
+    def external_source(name, sport, call):
+        try:
+            events = call()
+            matches = [make_match(
+                source=name, sport=sport, league=row.league, team_a=row.team_a, team_b=row.team_b,
+                start_time=row.start_time, event_name=row.event_name, best_of=row.best_of,
+                event_status=row.status,
+            ) for row in events if row.start_time.astimezone(zone).date() == report_day]
+            return SourceResult(name, True, matches)
+        except Exception as error:
+            return SourceResult(name, False, [], repr(error))
+
+    nba_sources = [
+        external_source("nba_official", "nba", lambda: NbaOfficialProvider().schedule(report_day)),
+        external_source("espn", "nba", lambda: EspnNbaProvider().schedule(report_day)),
+        external_source("thesportsdb", "nba", lambda: TheSportsDbNbaProvider().schedule(report_day)),
+        external_source("sportsrc", "nba", lambda: SportSrcNbaProvider().schedule(report_day)),
+    ]
+    panda = PandaScoreProvider()
+    grid = GridOpenAccessProvider()
+    bo3_source = external_source("bo3", "cs2", lambda: Bo3Cs2Provider().schedule(report_day))
+    target_tournaments = {row.event_name for row in bo3_source.matches}
+    cs2_sources = [
+        bo3_source,
+        external_source("esportagenda_cs2", "cs2", lambda: EsportAgendaCs2Provider().schedule(
+            report_day, target_tournaments)),
+        external_source("grid", "cs2", lambda: grid.schedule(report_day)),
+        external_source("pandascore", "cs2", lambda: panda.schedule("cs2", report_day)),
+    ]
+    nba_audit = build_schedule_audit(
+        nba_sources, market_events["nba"], report_day=report_day, now=now,
+        registry_path=os.getenv("WATCHER_REGISTRY_PATH", "data/daily/watcher_registry.json"),
+        target_leagues=("NBA",),
+        market_search=market_search,
+    )
+    cs2_audit = build_schedule_audit(
+        cs2_sources, market_events["cs2"], report_day=report_day, now=now,
+        registry_path=os.getenv("WATCHER_REGISTRY_PATH", "data/daily/watcher_registry.json"),
+        target_leagues=("CS2",),
+        market_search=market_search,
+    )
+    audits = {"lol": lol_audit, "nba": nba_audit, "cs2": cs2_audit}
+    for sport, audit in audits.items():
+        append_schedule_audit(
+            audit, os.getenv("SCHEDULE_AUDIT_LOG",
+                             f"data/daily/schedule_audits/{report_day.isoformat()}-{sport}.jsonl"),
+        )
     for sport, tag in TAGS.items():
         filename = "lol_meta_model.json" if sport == "lol" else f"{sport}_model.json"
         path = Path(model_dir) / filename
@@ -274,7 +340,7 @@ def run_all(model_dir: str | Path, output: str | Path, *, now: datetime | None =
             model, evaluation = load_nba(path)
         else:
             model, evaluation = load_model(path)
-        events = client.events_by_tag(tag, limit=100)
+        events = market_events[sport]
         if sport == "cs2":
             sport_rows = analyze_cs2(model, evaluation, events, now=now, bankroll=bankroll)
         elif sport == "lol":
@@ -292,10 +358,11 @@ def run_all(model_dir: str | Path, output: str | Path, *, now: datetime | None =
             "today_probability_eligible": sum(row["probability_eligible"] for row in sport_rows),
             "today_bet_candidates": sum(row["action"] == "BET" for row in sport_rows),
         }
-    zone = ZoneInfo(os.getenv("REPORT_TIMEZONE", "Asia/Shanghai"))
     report = {
-        "report_date": now.astimezone(zone).date().isoformat(), "generated_at": now.isoformat(),
+        "report_date": report_day.isoformat(), "generated_at": now.isoformat(),
         "bankroll_usdc": bankroll, "recommendations": recommendations, "sport_status": statuses,
+        "schedule_coverage": audits,
+        "data_incomplete": any(audit["data_incomplete"] for audit in audits.values()),
         "risk_notes": ["NBA、LoL、CS2 分别训练和验收；CBA 已暂停。历史可成交赔率 ROI 验收前均保持 NO_BET。"],
     }
     Path(output).parent.mkdir(parents=True, exist_ok=True)

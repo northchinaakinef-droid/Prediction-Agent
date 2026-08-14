@@ -9,7 +9,7 @@ from pathlib import Path
 
 from .backtest import load_csv, run_backtest
 from .cs2_model import evaluate_cs2, load_valve_vrs, save_cs2
-from .delivery import FeishuAppClient, FeishuWebhookClient, format_daily_report
+from .delivery import FeishuAppClient, FeishuWebhookClient, format_daily_post, format_daily_report
 from .next_model import DEFAULT_FEATURES, load_jsonl, walk_forward_evaluate
 from .lol_daily import run_daily
 from .lol_model import evaluate_periods, evaluate_years, fit_elo, load_oracle_elixir, save_model
@@ -79,6 +79,15 @@ def main() -> None:
     all_daily.add_argument("--model-dir", default="artifacts")
     all_daily.add_argument("--output", default="reports/daily.json")
     all_daily.add_argument("--paper-db", help="append this genuinely forward run to a SQLite ledger")
+    audit = sub.add_parser("schedule-audit", help="discover schedules, reconcile markets, and report coverage")
+    audit.add_argument("--date", help="report date in Asia/Singapore (YYYY-MM-DD)")
+    audit.add_argument("--model-dir", default="artifacts")
+    audit.add_argument("--output", default="reports/schedule_audit.json")
+    live_scan = sub.add_parser("live-scan", help="run one live-data, market, probability, and alert scan")
+    live_scan.add_argument("--output", default="reports/live_scan.json")
+    history = sub.add_parser("live-history", help="replay stored time-series snapshots for one match key")
+    history.add_argument("match_key")
+    history.add_argument("--db", default="data/daily/live.db")
     paper = sub.add_parser("paper-summary", help="summarize the append-only forward prediction ledger")
     paper.add_argument("--paper-db", default="data/daily/paper.db")
     settle = sub.add_parser("paper-settle", help="settle prior ledger events from Polymarket")
@@ -148,6 +157,23 @@ def main() -> None:
         if args.paper_db:
             report["paper_store"] = record_report(args.paper_db, report)
         print(json.dumps(report, ensure_ascii=False, indent=2))
+    elif args.command == "schedule-audit":
+        from datetime import date as calendar_date
+        report_day = calendar_date.fromisoformat(args.date) if args.date else None
+        report = run_all(args.model_dir, args.output, report_day=report_day)
+        payload = json.dumps(report["schedule_coverage"], ensure_ascii=False, indent=2)
+        Path(args.output).write_text(payload, encoding="utf-8")
+        print(payload)
+    elif args.command == "live-scan":
+        from .live_runtime import LiveSupervisor
+        result = LiveSupervisor(root=Path.cwd()).scan_once()
+        payload = json.dumps(result, ensure_ascii=False, indent=2)
+        Path(args.output).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.output).write_text(payload, encoding="utf-8")
+        print(payload)
+    elif args.command == "live-history":
+        from .live_engine import LiveStore
+        print(json.dumps(LiveStore(args.db).history(args.match_key), ensure_ascii=False, indent=2))
     elif args.command == "paper-summary":
         print(json.dumps(paper_summary(args.paper_db), ensure_ascii=False, indent=2))
     elif args.command == "paper-settle":
@@ -170,7 +196,7 @@ def main() -> None:
                 os.environ["FEISHU_APP_ID"], os.environ["FEISHU_APP_SECRET"],
                 os.environ["FEISHU_RECEIVE_ID"], os.getenv("FEISHU_RECEIVE_ID_TYPE", "open_id"),
             )
-        result = client.send_text(message)
+        result = client.send_post(format_daily_post(report_data))
         print(json.dumps({"sent": True, "parts": len(result)}, ensure_ascii=False))
 
 

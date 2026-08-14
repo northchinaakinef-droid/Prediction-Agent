@@ -3,7 +3,7 @@ import unittest
 
 from prediction_agent.anomaly import detect_market_anomalies
 from prediction_agent.backtest import BacktestRow, run_backtest
-from prediction_agent.delivery import FeishuWebhookClient, format_daily_report, webhook_signature
+from prediction_agent.delivery import FeishuWebhookClient, format_daily_post, format_daily_report, webhook_signature
 from prediction_agent.models import MarketSnapshot
 from prediction_agent.risk import normalize_two_way, recommend
 
@@ -81,9 +81,25 @@ class CoreTests(unittest.TestCase):
         FeishuWebhookClient("https://example.invalid/hook", transport=transport).send_text("hello")
         self.assertEqual(calls[0][1]["content"]["text"], "hello")
 
+    def test_feishu_webhook_rich_post_payload(self):
+        calls = []
+        def transport(url, payload, **kwargs):
+            calls.append((url, payload))
+            return {"code": 0}
+        post = format_daily_post({"report_date": "2026-08-14", "recommendations": []})
+        FeishuWebhookClient("https://example.invalid/hook", transport=transport).send_post(post)
+        self.assertEqual(calls[0][1]["msg_type"], "post")
+        self.assertEqual(calls[0][1]["content"]["post"]["zh_cn"]["title"], "每日赛事研究｜2026-08-14")
+
+    def test_feishu_rejects_corrupted_rich_post(self):
+        client = FeishuWebhookClient("https://example.invalid/hook", transport=lambda *_args, **_kwargs: {"code": 0})
+        with self.assertRaisesRegex(ValueError, "corrupted text"):
+            client.send_post({"zh_cn": {"title": "????", "content": []}})
+
     def test_daily_report_supports_no_bet(self):
         message = format_daily_report({"recommendations": []})
-        self.assertIn("NO BET", message)
+        self.assertIn("暂无达到策略与风控要求的机会", message)
+        self.assertNotIn("NO BET", message)
 
     def test_daily_report_highlights_and_sorts_bets(self):
         message = format_daily_report({"bankroll_usdc": 1100, "recommendations": [
@@ -91,8 +107,8 @@ class CoreTests(unittest.TestCase):
             {"event": "opportunity", "action": "BET"},
         ]})
         self.assertLess(message.index("opportunity"), message.index("ordinary"))
-        self.assertIn("★ 合适机会", message)
-        self.assertIn("独立模型概率", message)
+        self.assertIn("符合策略", message)
+        self.assertIn("模型胜率", message)
 
 
 if __name__ == "__main__":

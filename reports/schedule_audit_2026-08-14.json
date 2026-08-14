@@ -1,0 +1,599 @@
+{
+  "lol": {
+    "report_date": "2026-08-14",
+    "timezone": "Asia/Singapore",
+    "query_buffer_hours": 6,
+    "minimum_schedule_coverage": 1.0,
+    "expected": 7,
+    "discovered": 7,
+    "market_matched": 7,
+    "watching": 7,
+    "finished": 0,
+    "coverage": 1.0,
+    "market_coverage": 1.0,
+    "data_incomplete": false,
+    "status": "COMPLETE_WITH_SOURCE_WARNINGS",
+    "source_warning": true,
+    "watcher_health": {
+      "expected_live": 6,
+      "active_live": 6,
+      "healthy": true
+    },
+    "leagues": {
+      "FIRST STAND": {
+        "expected": 0,
+        "discovered": 0,
+        "market_matched": 0,
+        "watching": 0,
+        "finished": 0,
+        "market_coverage": 1.0,
+        "source_status": {
+          "nextmatch": "OK",
+          "esportagenda": "OK"
+        }
+      },
+      "LCK": {
+        "expected": 2,
+        "discovered": 2,
+        "market_matched": 2,
+        "watching": 2,
+        "finished": 0,
+        "market_coverage": 1.0,
+        "source_status": {
+          "nextmatch": "OK",
+          "esportagenda": "OK"
+        }
+      },
+      "LCP": {
+        "expected": 1,
+        "discovered": 1,
+        "market_matched": 1,
+        "watching": 1,
+        "finished": 0,
+        "market_coverage": 1.0,
+        "source_status": {
+          "nextmatch": "OK",
+          "esportagenda": "OK"
+        }
+      },
+      "LEC": {
+        "expected": 1,
+        "discovered": 1,
+        "market_matched": 1,
+        "watching": 1,
+        "finished": 0,
+        "market_coverage": 1.0,
+        "source_status": {
+          "nextmatch": "OK",
+          "esportagenda": "OK"
+        }
+      },
+      "LPL": {
+        "expected": 3,
+        "discovered": 3,
+        "market_matched": 3,
+        "watching": 3,
+        "finished": 0,
+        "market_coverage": 1.0,
+        "source_status": {
+          "nextmatch": "OK",
+          "esportagenda": "OK"
+        }
+      },
+      "LTA": {
+        "expected": 0,
+        "discovered": 0,
+        "market_matched": 0,
+        "watching": 0,
+        "finished": 0,
+        "market_coverage": 1.0,
+        "source_status": {
+          "nextmatch": "OK",
+          "esportagenda": "OK"
+        }
+      },
+      "MSI": {
+        "expected": 0,
+        "discovered": 0,
+        "market_matched": 0,
+        "watching": 0,
+        "finished": 0,
+        "market_coverage": 1.0,
+        "source_status": {
+          "nextmatch": "OK",
+          "esportagenda": "OK"
+        }
+      },
+      "WORLDS": {
+        "expected": 0,
+        "discovered": 0,
+        "market_matched": 0,
+        "watching": 0,
+        "finished": 0,
+        "market_coverage": 1.0,
+        "source_status": {
+          "nextmatch": "OK",
+          "esportagenda": "OK"
+        }
+      }
+    },
+    "source_errors": [],
+    "source_disagreements": [
+      {
+        "match_id": "f7e740dea526757cff72",
+        "league": "LPL",
+        "event": "Edward Gaming vs LGD Gaming",
+        "sources": [
+          "nextmatch"
+        ],
+        "reason": "only one schedule source returned this match"
+      },
+      {
+        "match_id": "d3caaa9fe189e1841ced",
+        "league": "LCK",
+        "event": "T1 vs Dplus KIA",
+        "sources": [
+          "nextmatch"
+        ],
+        "reason": "only one schedule source returned this match"
+      },
+      {
+        "match_id": "aa25d245bb427feff08c",
+        "league": "LCP",
+        "event": "MVK Esports vs CTBC Flying Oyster",
+        "sources": [
+          "nextmatch"
+        ],
+        "reason": "only one schedule source returned this match"
+      },
+      {
+        "match_id": "0f6d5d1e7c58887d1e38",
+        "league": "LPL",
+        "event": "Team WE vs Top Esports",
+        "sources": [
+          "nextmatch"
+        ],
+        "reason": "only one schedule source returned this match"
+      },
+      {
+        "match_id": "96e28fb61289514e2e8b",
+        "league": "LCK",
+        "event": "Nongshim RedForce vs HANJIN BRION",
+        "sources": [
+          "nextmatch"
+        ],
+        "reason": "only one schedule source returned this match"
+      }
+    ],
+    "missing": [],
+    "matches": [
+      {
+        "match_id": "f7e740dea526757cff72",
+        "sport": "lol",
+        "league": "LPL",
+        "team_a": "Edward Gaming",
+        "team_b": "LGD Gaming",
+        "start_time": "2026-08-14T07:00:00+00:00",
+        "best_of": null,
+        "event_name": "07:00 AM LPL Group Ascend",
+        "event_status": "SCHEDULED",
+        "sources": [
+          "nextmatch"
+        ],
+        "market_id": "3328409",
+        "market_mapping_status": "MATCHED",
+        "watcher_status": "LIVE",
+        "analysis_status": "UNAVAILABLE",
+        "missing_stage": null,
+        "missing_reason": null
+      },
+      {
+        "match_id": "d3caaa9fe189e1841ced",
+        "sport": "lol",
+        "league": "LCK",
+        "team_a": "T1",
+        "team_b": "Dplus KIA",
+        "start_time": "2026-08-14T08:00:00+00:00",
+        "best_of": null,
+        "event_name": "08:00 AM LCK Round 3-4 Legend Group",
+        "event_status": "SCHEDULED",
+        "sources": [
+          "nextmatch"
+        ],
+        "market_id": "3427793",
+        "market_mapping_status": "MATCHED",
+        "watcher_status": "LIVE",
+        "analysis_status": "UNAVAILABLE",
+        "missing_stage": null,
+        "missing_reason": null
+      },
+      {
+        "match_id": "aa25d245bb427feff08c",
+        "sport": "lol",
+        "league": "LCP",
+        "team_a": "MVK Esports",
+        "team_b": "CTBC Flying Oyster",
+        "start_time": "2026-08-14T09:00:00+00:00",
+        "best_of": null,
+        "event_name": "09:00 AM LCP Group Stage",
+        "event_status": "SCHEDULED",
+        "sources": [
+          "nextmatch"
+        ],
+        "market_id": "3511089",
+        "market_mapping_status": "MATCHED",
+        "watcher_status": "LIVE",
+        "analysis_status": "UNAVAILABLE",
+        "missing_stage": null,
+        "missing_reason": null
+      },
+      {
+        "match_id": "0f6d5d1e7c58887d1e38",
+        "sport": "lol",
+        "league": "LPL",
+        "team_a": "Team WE",
+        "team_b": "Top Esports",
+        "start_time": "2026-08-14T09:00:00+00:00",
+        "best_of": null,
+        "event_name": "09:00 AM LPL Group Ascend",
+        "event_status": "SCHEDULED",
+        "sources": [
+          "nextmatch"
+        ],
+        "market_id": "3328435",
+        "market_mapping_status": "MATCHED",
+        "watcher_status": "LIVE",
+        "analysis_status": "UNAVAILABLE",
+        "missing_stage": null,
+        "missing_reason": null
+      },
+      {
+        "match_id": "96e28fb61289514e2e8b",
+        "sport": "lol",
+        "league": "LCK",
+        "team_a": "Nongshim RedForce",
+        "team_b": "HANJIN BRION",
+        "start_time": "2026-08-14T10:00:00+00:00",
+        "best_of": null,
+        "event_name": "10:00 AM LCK Round 3-4 Rise Group",
+        "event_status": "SCHEDULED",
+        "sources": [
+          "nextmatch"
+        ],
+        "market_id": "3427816",
+        "market_mapping_status": "MATCHED",
+        "watcher_status": "LIVE",
+        "analysis_status": "UNAVAILABLE",
+        "missing_stage": null,
+        "missing_reason": null
+      },
+      {
+        "match_id": "f8f0b04ae934f82ed21a",
+        "sport": "lol",
+        "league": "LPL",
+        "team_a": "Anyone's Legend",
+        "team_b": "JD Gaming",
+        "start_time": "2026-08-14T11:00:00+00:00",
+        "best_of": null,
+        "event_name": "11:00 AM LPL Group Ascend",
+        "event_status": "SCHEDULED",
+        "sources": [
+          "esportagenda",
+          "nextmatch"
+        ],
+        "market_id": "3328458",
+        "market_mapping_status": "MATCHED",
+        "watcher_status": "LIVE",
+        "analysis_status": "UNAVAILABLE",
+        "missing_stage": null,
+        "missing_reason": null
+      },
+      {
+        "match_id": "8e96516e42bb23aaf4d6",
+        "sport": "lol",
+        "league": "LEC",
+        "team_a": "Shifters",
+        "team_b": "SK Gaming",
+        "start_time": "2026-08-14T15:00:00+00:00",
+        "best_of": null,
+        "event_name": "03:00 PM LEC Regular Season",
+        "event_status": "SCHEDULED",
+        "sources": [
+          "esportagenda",
+          "nextmatch"
+        ],
+        "market_id": "3526815",
+        "market_mapping_status": "MATCHED",
+        "watcher_status": "WAITING",
+        "analysis_status": "UNAVAILABLE",
+        "missing_stage": null,
+        "missing_reason": null
+      }
+    ],
+    "monitoring_recovery": []
+  },
+  "nba": {
+    "report_date": "2026-08-14",
+    "timezone": "Asia/Singapore",
+    "query_buffer_hours": 6,
+    "minimum_schedule_coverage": 1.0,
+    "expected": 0,
+    "discovered": 0,
+    "market_matched": 0,
+    "watching": 0,
+    "finished": 0,
+    "coverage": 1.0,
+    "market_coverage": 1.0,
+    "data_incomplete": false,
+    "status": "COMPLETE_WITH_SOURCE_WARNINGS",
+    "source_warning": true,
+    "watcher_health": {
+      "expected_live": 0,
+      "active_live": 0,
+      "healthy": true
+    },
+    "leagues": {
+      "NBA": {
+        "expected": 0,
+        "discovered": 0,
+        "market_matched": 0,
+        "watching": 0,
+        "finished": 0,
+        "market_coverage": 1.0,
+        "source_status": {
+          "nba_official": "DATA_UNAVAILABLE",
+          "espn": "DATA_UNAVAILABLE",
+          "thesportsdb": "OK",
+          "sportsrc": "OK"
+        }
+      }
+    },
+    "source_errors": [
+      {
+        "name": "nba_official",
+        "available": false,
+        "matches": 0,
+        "error": "DataSourceUnavailable(\"https://cdn.nba.com/static/json/staticData/scheduleLeagueV2_1.json: <HTTPError 403: 'Forbidden'>\")"
+      },
+      {
+        "name": "espn",
+        "available": false,
+        "matches": 0,
+        "error": "DataSourceUnavailable(\"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates=20260813&limit=100: <HTTPError 403: 'Forbidden'>\")"
+      }
+    ],
+    "source_disagreements": [],
+    "missing": [],
+    "matches": [],
+    "monitoring_recovery": []
+  },
+  "cs2": {
+    "report_date": "2026-08-14",
+    "timezone": "Asia/Singapore",
+    "query_buffer_hours": 6,
+    "minimum_schedule_coverage": 1.0,
+    "expected": 6,
+    "discovered": 6,
+    "market_matched": 6,
+    "watching": 2,
+    "finished": 4,
+    "coverage": 1.0,
+    "market_coverage": 1.0,
+    "data_incomplete": false,
+    "status": "COMPLETE_WITH_SOURCE_WARNINGS",
+    "source_warning": true,
+    "watcher_health": {
+      "expected_live": 0,
+      "active_live": 0,
+      "healthy": true
+    },
+    "leagues": {
+      "CS2": {
+        "expected": 0,
+        "discovered": 0,
+        "market_matched": 0,
+        "watching": 0,
+        "finished": 0,
+        "market_coverage": 1.0,
+        "source_status": {
+          "bo3": "OK",
+          "esportagenda_cs2": "OK",
+          "grid": "DATA_UNAVAILABLE",
+          "pandascore": "DATA_UNAVAILABLE"
+        }
+      },
+      "ESPORTS WORLD CUP 2026": {
+        "expected": 6,
+        "discovered": 6,
+        "market_matched": 6,
+        "watching": 2,
+        "finished": 4,
+        "market_coverage": 1.0,
+        "source_status": {
+          "bo3": "OK",
+          "esportagenda_cs2": "OK",
+          "grid": "DATA_UNAVAILABLE",
+          "pandascore": "DATA_UNAVAILABLE"
+        }
+      }
+    },
+    "source_errors": [
+      {
+        "name": "grid",
+        "available": false,
+        "matches": 0,
+        "error": "DataSourceUnavailable('GRID_API_KEY is not configured; Open Access registration is required')"
+      },
+      {
+        "name": "pandascore",
+        "available": false,
+        "matches": 0,
+        "error": "DataSourceUnavailable('PANDASCORE_TOKEN is not configured')"
+      }
+    ],
+    "source_disagreements": [
+      {
+        "match_id": "25447f10edc0541ab586",
+        "league": "ESPORTS WORLD CUP 2026",
+        "event": "TYLOO vs Lynn Vision",
+        "sources": [
+          "bo3"
+        ],
+        "reason": "only one schedule source returned this match"
+      },
+      {
+        "match_id": "b5a509ae6a747347833d",
+        "league": "ESPORTS WORLD CUP 2026",
+        "event": "BetBoom Team vs Ninjas in Pyjamas",
+        "sources": [
+          "bo3"
+        ],
+        "reason": "only one schedule source returned this match"
+      },
+      {
+        "match_id": "bb3bad9708b126f2d885",
+        "league": "ESPORTS WORLD CUP 2026",
+        "event": "Falcons vs Astralis",
+        "sources": [
+          "bo3"
+        ],
+        "reason": "only one schedule source returned this match"
+      },
+      {
+        "match_id": "8b539661bfbd6745ced7",
+        "league": "ESPORTS WORLD CUP 2026",
+        "event": "FaZe vs Legacy",
+        "sources": [
+          "bo3"
+        ],
+        "reason": "only one schedule source returned this match"
+      }
+    ],
+    "missing": [],
+    "matches": [
+      {
+        "match_id": "8b539661bfbd6745ced7",
+        "sport": "cs2",
+        "league": "ESPORTS WORLD CUP 2026",
+        "team_a": "FaZe",
+        "team_b": "Legacy",
+        "start_time": "2026-08-13T16:50:00+00:00",
+        "best_of": 3,
+        "event_name": "Esports World Cup 2026",
+        "event_status": "finished",
+        "sources": [
+          "bo3"
+        ],
+        "market_id": "3542893",
+        "market_mapping_status": "MATCHED",
+        "watcher_status": "FINISHED",
+        "analysis_status": "UNAVAILABLE",
+        "missing_stage": null,
+        "missing_reason": null
+      },
+      {
+        "match_id": "bb3bad9708b126f2d885",
+        "sport": "cs2",
+        "league": "ESPORTS WORLD CUP 2026",
+        "team_a": "Falcons",
+        "team_b": "Astralis",
+        "start_time": "2026-08-13T17:00:00+00:00",
+        "best_of": 3,
+        "event_name": "Esports World Cup 2026",
+        "event_status": "finished",
+        "sources": [
+          "bo3"
+        ],
+        "market_id": "3546687",
+        "market_mapping_status": "MATCHED",
+        "watcher_status": "FINISHED",
+        "analysis_status": "UNAVAILABLE",
+        "missing_stage": null,
+        "missing_reason": null
+      },
+      {
+        "match_id": "25447f10edc0541ab586",
+        "sport": "cs2",
+        "league": "ESPORTS WORLD CUP 2026",
+        "team_a": "TYLOO",
+        "team_b": "Lynn Vision",
+        "start_time": "2026-08-14T11:00:00+00:00",
+        "best_of": 3,
+        "event_name": "Esports World Cup 2026",
+        "event_status": "finished",
+        "sources": [
+          "bo3"
+        ],
+        "market_id": "3552227",
+        "market_mapping_status": "MATCHED",
+        "watcher_status": "FINISHED",
+        "analysis_status": "UNAVAILABLE",
+        "missing_stage": null,
+        "missing_reason": null
+      },
+      {
+        "match_id": "b5a509ae6a747347833d",
+        "sport": "cs2",
+        "league": "ESPORTS WORLD CUP 2026",
+        "team_a": "BetBoom Team",
+        "team_b": "Ninjas in Pyjamas",
+        "start_time": "2026-08-14T11:00:00+00:00",
+        "best_of": 3,
+        "event_name": "Esports World Cup 2026",
+        "event_status": "finished",
+        "sources": [
+          "bo3"
+        ],
+        "market_id": "3543243",
+        "market_mapping_status": "MATCHED",
+        "watcher_status": "FINISHED",
+        "analysis_status": "UNAVAILABLE",
+        "missing_stage": null,
+        "missing_reason": null
+      },
+      {
+        "match_id": "b6444b711470bb321e91",
+        "sport": "cs2",
+        "league": "ESPORTS WORLD CUP 2026",
+        "team_a": "Vitality",
+        "team_b": "B8",
+        "start_time": "2026-08-14T13:30:00+00:00",
+        "best_of": 3,
+        "event_name": "Esports World Cup 2026",
+        "event_status": "upcoming",
+        "sources": [
+          "bo3",
+          "esportagenda_cs2"
+        ],
+        "market_id": "3550842",
+        "market_mapping_status": "MATCHED",
+        "watcher_status": "WAITING",
+        "analysis_status": "UNAVAILABLE",
+        "missing_stage": null,
+        "missing_reason": null
+      },
+      {
+        "match_id": "c77676ac1261dc4e54a3",
+        "sport": "cs2",
+        "league": "ESPORTS WORLD CUP 2026",
+        "team_a": "FUT Esports",
+        "team_b": "MOUZ",
+        "start_time": "2026-08-14T13:30:00+00:00",
+        "best_of": 3,
+        "event_name": "Esports World Cup 2026",
+        "event_status": "upcoming",
+        "sources": [
+          "bo3",
+          "esportagenda_cs2"
+        ],
+        "market_id": "3552216",
+        "market_mapping_status": "MATCHED",
+        "watcher_status": "WAITING",
+        "analysis_status": "UNAVAILABLE",
+        "missing_stage": null,
+        "missing_reason": null
+      }
+    ],
+    "monitoring_recovery": []
+  }
+}

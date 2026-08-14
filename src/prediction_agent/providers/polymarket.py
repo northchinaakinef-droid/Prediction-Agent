@@ -51,6 +51,30 @@ class PolymarketClient:
             self.timeout,
         )
 
+    def all_events_by_tag(
+        self,
+        tag_id: str,
+        *,
+        page_size: int = 100,
+        active: bool = True,
+        closed: bool = False,
+        max_pages: int = 20,
+    ) -> list[dict[str, Any]]:
+        """Return every event for a tag instead of silently truncating page one."""
+        if page_size < 1 or page_size > 500:
+            raise ValueError("page_size must be between 1 and 500")
+        events: dict[str, dict[str, Any]] = {}
+        for page in range(max_pages):
+            rows = self.events_by_tag(
+                tag_id, limit=page_size, active=active, closed=closed,
+                offset=page * page_size,
+            )
+            for row in rows:
+                events[str(row.get("id"))] = row
+            if len(rows) < page_size:
+                return list(events.values())
+        raise RuntimeError(f"Polymarket pagination exceeded {max_pages} pages for tag {tag_id}")
+
     def search_sports(self, query: str, *, limit: int = 100) -> list[dict[str, Any]]:
         needle = query.casefold()
         for sport in self.sports():
@@ -58,15 +82,25 @@ class PolymarketClient:
                 tags = [tag.strip() for tag in str(sport.get("tags", "")).split(",") if tag.strip()]
                 events: list[dict[str, Any]] = []
                 for tag in tags:
-                    events.extend(self.events_by_tag(tag, limit=limit))
+                    events.extend(self.all_events_by_tag(tag, page_size=min(limit, 500)))
                 # The same event may occur under related tags.
                 return list({str(e.get("id")): e for e in events}.values())[:limit]
         rows = self.markets(limit=limit)
         return [m for m in rows if needle in f"{m.get('question', '')} {m.get('description', '')}".casefold()]
 
+    def public_search(self, query: str, *, include_closed: bool = True, limit: int = 10) -> list[dict[str, Any]]:
+        """Search active/recently closed events for schedule backfill and audit reconciliation."""
+        payload = get_json(
+            f"{GAMMA}/public-search",
+            {"q": query, "limit_per_type": limit, "keep_closed_markets": 1 if include_closed else 0,
+             "search_profiles": "false"},
+            self.timeout,
+        )
+        return list(payload.get("events") or [])
+
     def lol_events(self, *, limit: int = 100) -> list[dict[str, Any]]:
         """Active LoL events. Tag 65 is Polymarket's primary LoL tag."""
-        return self.events_by_tag("65", limit=limit)
+        return self.all_events_by_tag("65", page_size=limit)
 
     def order_book(self, token_id: str) -> dict[str, Any]:
         return get_json(f"{CLOB}/book", {"token_id": token_id}, self.timeout)

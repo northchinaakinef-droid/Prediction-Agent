@@ -35,6 +35,7 @@ python -m prediction_agent.cli sport-train nba data/raw/nba/*.csv
 python -m prediction_agent.cli sport-train cba data/raw/cba/*.csv
 python -m prediction_agent.cli sport-train lol data/raw/lol/*.csv --format oracle-elixir
 python -m prediction_agent.cli daily --model-dir artifacts --output reports/daily.json
+python -m prediction_agent.cli schedule-audit --date 2026-08-14 --output reports/schedule_audit_2026-08-14.json
 python -m prediction_agent.cli notify reports/daily.json --dry-run
 ```
 
@@ -47,6 +48,19 @@ NBA/CBA 的规范输入列为 `event_id,played_at,team_a,team_b,team_a_won`。�
 服务器购买与安全配置请先阅读 [`SERVER_SETUP.md`](SERVER_SETUP.md)。当前推荐腾讯云轻量应用服务器中国香港 2核2GB、Ubuntu 24.04，先按月购买验证；不需要 GPU、域名或数据库产品。
 
 生产环境使用一台 Linux VPS/云服务器运行 Docker 容器，不依赖本机、Codex 桌面程序或 GitHub Actions。容器默认每天北京时间 06:30 执行：加载已冻结的 NBA/LoL/CS2 模型 → 获取当天赛程与市场 → 生成报告 → 推送飞书。CBA 当前暂停；CS2 已进入研究概率推送，但 2026 市场锁箱回测未通过，因此强制 `NO_BET`。`/health` 返回最近一次运行时间和错误状态。
+
+日报中的 LoL 赛事先由两个独立赛程站点动态发现，再与完整分页后的 Polymarket moneyline 市场对账。内部时间统一为 UTC，日报自然日默认使用 `Asia/Singapore`。赛程源失败显示 `DATA_UNAVAILABLE`，市场缺失显示 `MISSING_MARKET`，不会被当作 0 场；审计历史追加到 `data/daily/schedule_audits/`，watcher 状态保存在 `data/daily/watcher_registry.json`。可用 `NEXTMATCH_SCHEDULE_URL`、`ESPORTAGENDA_LOL_URLS`、`REPORT_TIMEZONE` 覆盖数据源和时区。
+
+## 持续赛中监控
+
+服务器每 `LIVE_SCAN_SECONDS` 秒运行一次实时 supervisor，并把比赛状态、模型概率和 Polymarket 盘口快照写入 `data/daily/live.db`。LoL 优先使用 Riot Esports live feed；CS2 使用匿名 BO3.gg JSON，以 EsportAgenda 交叉验证，并可接入 GRID Open Access；NBA 优先使用 NBA LiveData，并以 ESPN、TheSportsDB、SportSRC 降级验证。PandaScore 是可选降级源。数据源失败会进入 `/health` 的 `live.source_status` 并触发一次飞书告警，不会解释为“没有比赛”。
+
+```bash
+python -m prediction_agent.cli live-scan --output reports/live_scan.json
+python -m prediction_agent.cli live-history 'lol:t1:dpluskia'
+```
+
+赛中概率更新、Alert Score 和消息均为 `Research Only`。LoL BP 会在实时源提供完整英雄阵容后调用已冻结的 Player × Champion 模型；缺少阵容、赛前独立 prior 或实时字段时输出 `UNAVAILABLE`。当前透明实时更新器标记为 `UNVALIDATED_RESEARCH_ONLY`，不会改变 `real_money_approved=false`。
 
 模型训练与每日预测分开：训练任务只有在获得新赛季数据后人工触发，必须先通过验证和锁箱测试，再把模型文件放入服务器 `artifacts/`。每日任务只能读取模型，不能擅自改动参数或重训。
 
