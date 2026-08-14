@@ -91,6 +91,11 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(calls[0][1]["msg_type"], "post")
         self.assertEqual(calls[0][1]["content"]["post"]["zh_cn"]["title"], "每日赛事研究｜2026-08-14")
 
+    def test_feishu_rejects_corrupted_rich_post(self):
+        client = FeishuWebhookClient("https://example.invalid/hook", transport=lambda *_args, **_kwargs: {"code": 0})
+        with self.assertRaisesRegex(ValueError, "corrupted text"):
+            client.send_post({"zh_cn": {"title": "????", "content": []}})
+
     def test_daily_report_supports_no_bet(self):
         message = format_daily_report({"recommendations": []})
         self.assertIn("暂无达到策略与风控要求的机会", message)

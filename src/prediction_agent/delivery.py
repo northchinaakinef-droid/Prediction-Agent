@@ -18,6 +18,23 @@ from .providers.http import post_json
 Transport = Callable[..., Any]
 
 
+def _validate_post_text(post: dict[str, Any]) -> None:
+    """Reject text that was damaged by a shell/console encoding conversion."""
+    suspicious_fragments = ("??", "\ufffd", "锛", "鈥", "馃")
+
+    def walk(value: Any) -> None:
+        if isinstance(value, str) and any(fragment in value for fragment in suspicious_fragments):
+            raise ValueError("Feishu message contains corrupted text; refusing to send")
+        if isinstance(value, dict):
+            for child in value.values():
+                walk(child)
+        elif isinstance(value, list):
+            for child in value:
+                walk(child)
+
+    walk(post)
+
+
 def _chunks(text: str, limit: int = 12_000) -> list[str]:
     if limit < 1:
         raise ValueError("limit must be positive")
@@ -51,6 +68,7 @@ class FeishuWebhookClient:
 
     def send_post(self, post: dict[str, Any]) -> list[dict[str, Any]]:
         """Send one Feishu rich-text post through a v2 custom-bot webhook."""
+        _validate_post_text(post)
         payload: dict[str, object] = {"msg_type": "post", "content": {"post": post}}
         if self.secret:
             timestamp = int(time.time())
@@ -96,6 +114,7 @@ class FeishuAppClient:
 
     def send_post(self, post: dict[str, Any]) -> list[dict[str, Any]]:
         """Send one Feishu rich-text post through the app messaging API."""
+        _validate_post_text(post)
         token = self._tenant_token()
         url = f"https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type={self.receive_id_type}"
         payload = {
