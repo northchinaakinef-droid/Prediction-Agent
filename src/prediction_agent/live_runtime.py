@@ -5,6 +5,7 @@ import os
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable
+from zoneinfo import ZoneInfo
 
 from .entities import canonical_team, normalized_name
 from .live_engine import LiveAlert, LiveAnalysisEngine, LiveStore, match_key
@@ -35,7 +36,11 @@ class LiveSupervisor:
         path = self.root / "reports" / "daily.json"
         if not path.exists():
             return {}
-        return json.loads(path.read_text(encoding="utf-8"))
+        report = json.loads(path.read_text(encoding="utf-8"))
+        zone = ZoneInfo(os.getenv("REPORT_TIMEZONE", "Asia/Singapore"))
+        if report.get("report_date") != datetime.now(zone).date().isoformat():
+            return {}
+        return report
 
     def _emit_once(self, alert: LiveAlert) -> bool:
         if self.store.alert_exists(alert.dedupe_key):
@@ -238,10 +243,9 @@ class LiveSupervisor:
         return list(states_by_key.values())
 
     def _priors(self, states: list, market_events: dict[str, list[dict]]) -> dict[str, float]:
-        path = self.root / "reports" / "daily.json"
-        if not path.exists():
+        report = self._report()
+        if not report:
             return {}
-        report = json.loads(path.read_text(encoding="utf-8"))
         priors = {}
         recommendations = {(str(row.get("sport")), str(row.get("event_id"))): row
                            for row in report.get("recommendations", [])}
