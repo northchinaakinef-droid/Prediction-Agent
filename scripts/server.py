@@ -24,7 +24,7 @@ STATE = {"started_at": datetime.now(timezone.utc).isoformat(), "last_run": None,
 RUN_LOCK = threading.Lock()
 LIVE_SOURCE_SIGNATURE = None
 SOURCE_LABELS = {
-    "nba_official": "NBA 官方比分", "espn_nba": "ESPN NBA",
+    "nba_official": "NBA 官方比分", "espn_nba": "ESPN NBA", "thesportsdb_nba": "TheSportsDB NBA",
     "riot_esports": "LoL 官方 BP", "pandascore_lol": "PandaScore LoL",
     "leaguepedia_bp": "Leaguepedia BP", "bo3_cs2": "BO3.gg CS2",
     "grid_cs2": "GRID CS2", "pandascore_cs2": "PandaScore CS2",
@@ -141,7 +141,17 @@ def live_scheduler() -> None:
 
 
 def _health_ready() -> bool:
-    return STATE["error"] is None and STATE["live_error"] is None and STATE["live"] is not None
+    if STATE["error"] is not None or STATE["live_error"] is not None or STATE["live"] is None:
+        return False
+    sources = STATE["live"].get("source_status", {})
+    required_groups = (
+        ("nba_official", "espn_nba", "thesportsdb_nba"),
+        ("pandascore_lol",),
+        ("riot_esports", "leaguepedia_bp"),
+        ("bo3_cs2", "grid_cs2", "pandascore_cs2"),
+        ("polymarket_nba",), ("polymarket_lol",), ("polymarket_cs2",),
+    )
+    return all(any(sources.get(name, {}).get("available") for name in group) for group in required_groups)
 
 
 class Health(BaseHTTPRequestHandler):
