@@ -53,6 +53,7 @@ class CanonicalMatch:
     start_time: datetime
     best_of: int | None
     event_name: str
+    event_status: str = "SCHEDULED"
     sources: list[str] = field(default_factory=list)
     market_id: str | None = None
     market_mapping_status: str = "MARKET_NOT_FOUND"
@@ -76,13 +77,15 @@ class SourceResult:
 
 
 def make_match(*, source: str, league: str, team_a: str, team_b: str,
-               start_time: datetime, event_name: str, best_of: int | None = None) -> CanonicalMatch:
-    a, b = canonical_team("lol", team_a), canonical_team("lol", team_b)
+               start_time: datetime, event_name: str, best_of: int | None = None,
+               sport: str = "lol", event_status: str = "SCHEDULED") -> CanonicalMatch:
+    a, b = canonical_team(sport, team_a), canonical_team(sport, team_b)
     start = start_time.astimezone(timezone.utc)
-    key = "|".join(("lol", canonical_league(league), normalized_name(a), normalized_name(b), start.isoformat()))
+    normalized_league = canonical_league(league) if sport == "lol" else _clean(league).upper()
+    key = "|".join((sport, normalized_league, normalized_name(a), normalized_name(b), start.isoformat()))
     return CanonicalMatch(
-        hashlib.sha256(key.encode()).hexdigest()[:20], "lol", canonical_league(league),
-        a, b, start, best_of, _clean(event_name), [source],
+        hashlib.sha256(key.encode()).hexdigest()[:20], sport, normalized_league,
+        a, b, start, best_of, _clean(event_name), event_status, [source],
     )
 
 
@@ -118,7 +121,7 @@ def parse_esportagenda(html_text: str, report_day: date, zone: ZoneInfo) -> list
     # Nuxt serializes JSON-LD into its payload, so quotes may be escaped.
     text = html.unescape(html_text).replace('\\"', '"')
     pattern = re.compile(
-        r'"@type":"SportsEvent","name":"([^"]+?) vs\.? ([^"]+?)".*?'
+        r'"@type":"SportsEvent".*?"name":"([^"]+?) vs\.? ([^"]+?)".*?'
         r'"startDate":"([^"]+)".*?"organizer":\{"@type":"Organization","name":"([^"]+)"',
         re.S,
     )
@@ -168,7 +171,8 @@ class LolScheduleDiscovery:
 def _same_match(left: CanonicalMatch, right: CanonicalMatch) -> bool:
     left_teams = {normalized_name(left.team_a), normalized_name(left.team_b)}
     right_teams = {normalized_name(right.team_a), normalized_name(right.team_b)}
-    return left.league == right.league and left_teams == right_teams and abs(
+    same_competition = left.league == right.league or (left.sport == right.sport == "cs2")
+    return same_competition and left_teams == right_teams and abs(
         (left.start_time - right.start_time).total_seconds()
     ) <= 90 * 60
 
@@ -193,7 +197,7 @@ def reconcile_sources(results: Iterable[SourceResult]) -> tuple[list[CanonicalMa
     return sorted(expected, key=lambda row: row.start_time), disagreements
 
 
-def _market_candidates(events: list[dict]) -> Iterable[tuple[dict, dict, datetime, list[str]]]:
+def _market_candidates(events: list[dict], sport: str) -> Iterable[tuple[dict, dict, datetime, list[str]]]:
     for event in events:
         for market in event.get("markets", []):
             if market.get("sportsMarketType") != "moneyline" or not market.get("gameStartTime"):
@@ -203,12 +207,12 @@ def _market_candidates(events: list[dict]) -> Iterable[tuple[dict, dict, datetim
             if len(outcomes) != 2:
                 continue
             start = datetime.fromisoformat(str(market["gameStartTime"]).replace("Z", "+00:00"))
-            yield event, market, start, [canonical_team("lol", str(value)) for value in outcomes]
+            yield event, market, start, [canonical_team(sport, str(value)) for value in outcomes]
 
 
 def match_markets(matches: list[CanonicalMatch], events: list[dict]) -> None:
-    candidates = list(_market_candidates(events))
     for item in matches:
+        candidates = list(_market_candidates(events, item.sport))
         scored = []
         reviews = []
         wanted = {normalized_name(item.team_a), normalized_name(item.team_b)}
@@ -233,6 +237,8 @@ def match_markets(matches: list[CanonicalMatch], events: list[dict]) -> None:
             event, market = scored[0]
             item.market_id = str(market.get("id") or event.get("id"))
             item.market_mapping_status = "MATCHED"
+            item.missing_stage = None
+            item.missing_reason = None
         elif len(scored) > 1 or reviews:
             item.market_mapping_status = "MARKET_MAPPING_REVIEW"
             item.missing_stage = "market_mapping"
@@ -250,8 +256,8 @@ def update_watcher_registry(matches: list[CanonicalMatch], *, now: datetime, pat
         existing = {row["match_id"]: row for row in json.loads(registry_path.read_text(encoding="utf-8"))}
     recovery = []
     for item in matches:
-        if not item.market_id:
-            item.watcher_status = "MISSING_MARKET"
+        if item.event_status.casefold() in {"finished", "completed", "post", "defwin", "final"}:
+            item.watcher_status = "FINISHED"
         elif now >= item.start_time:
             item.watcher_status = "LIVE"
             if item.match_id not in existing:
@@ -262,6 +268,7 @@ def update_watcher_registry(matches: list[CanonicalMatch], *, now: datetime, pat
         existing[item.match_id] = {
             "match_id": item.match_id, "league": item.league, "start_time": item.start_time.isoformat(),
             "status": item.watcher_status, "market_id": item.market_id,
+            "market_status": item.market_mapping_status,
             "watcher_status": item.watcher_status, "last_game_update": now.isoformat(),
             "last_market_update": now.isoformat() if item.market_id else None, "last_news_update": None,
         }
@@ -270,12 +277,21 @@ def update_watcher_registry(matches: list[CanonicalMatch], *, now: datetime, pat
 
 
 def build_schedule_audit(results: list[SourceResult], market_events: list[dict], *,
-                         report_day: date, now: datetime, registry_path: str | Path) -> dict:
+                         report_day: date, now: datetime, registry_path: str | Path,
+                         target_leagues: Iterable[str] = TARGET_LOL_LEAGUES,
+                         market_search: Callable[[CanonicalMatch], list[dict]] | None = None) -> dict:
     matches, disagreements = reconcile_sources(results)
     match_markets(matches, market_events)
+    if market_search:
+        for item in matches:
+            if item.market_mapping_status != "MATCHED":
+                try:
+                    match_markets([item], market_search(item))
+                except Exception as error:
+                    item.missing_reason = f"Polymarket closed-market backfill failed: {error!r}"
     watcher = update_watcher_registry(matches, now=now, path=registry_path)
     by_league = {}
-    for league in sorted(set(TARGET_LOL_LEAGUES) | {row.league for row in matches}):
+    for league in sorted(set(target_leagues) | {row.league for row in matches}):
         rows = [row for row in matches if row.league == league]
         expected = len(rows)
         market = sum(row.market_mapping_status == "MATCHED" for row in rows)
@@ -283,27 +299,37 @@ def build_schedule_audit(results: list[SourceResult], market_events: list[dict],
         by_league[league] = {
             "expected": expected, "discovered": expected, "market_matched": market,
             "watching": watching, "finished": sum(row.watcher_status == "FINISHED" for row in rows),
+            "market_coverage": market / expected if expected else 1.0,
             "source_status": {result.name: "OK" if result.available else "DATA_UNAVAILABLE" for result in results},
         }
     total = len(matches)
     matched = sum(row.market_mapping_status == "MATCHED" for row in matches)
     watching = sum(row.watcher_status in {"WAITING", "LIVE"} for row in matches)
     unavailable = [asdict(result) | {"matches": len(result.matches)} for result in results if not result.available]
-    incomplete = bool(unavailable or matched < total or watching < total)
+    # Multiple healthy schedule sources may safely confirm zero events even when an
+    # additional provider is down. One healthy source is discovery, not confirmation.
+    insufficient_sources = sum(result.available for result in results) < 2
+    accounted = watching + sum(row.watcher_status == "FINISHED" for row in matches)
+    incomplete = bool(insufficient_sources or matched < total or accounted < total)
+    source_warning = bool(disagreements or unavailable)
     expected_live = sum(row.start_time <= now and row.watcher_status != "FINISHED" for row in matches)
     active_live_watchers = sum(row.watcher_status == "LIVE" for row in matches)
     return {
         "report_date": report_day.isoformat(), "timezone": str(ZoneInfo(os.getenv("REPORT_TIMEZONE", REPORT_ZONE))),
         "query_buffer_hours": 6, "minimum_schedule_coverage": 1.0,
         "expected": total, "discovered": total, "market_matched": matched, "watching": watching,
-        "finished": 0, "coverage": (watching / total if total else (1.0 if not unavailable else 0.0)),
+        "finished": sum(row.watcher_status == "FINISHED" for row in matches),
+        "coverage": ((watching + sum(row.watcher_status == "FINISHED" for row in matches)) / total
+                     if total else (0.0 if insufficient_sources else 1.0)),
+        "market_coverage": (matched / total if total else (0.0 if insufficient_sources else 1.0)),
         "data_incomplete": incomplete,
-        "status": "DATA_INCOMPLETE" if incomplete else ("COMPLETE_WITH_SOURCE_WARNINGS" if disagreements else "COMPLETE"),
-        "source_warning": bool(disagreements),
+        "status": "DATA_INCOMPLETE" if incomplete else ("COMPLETE_WITH_SOURCE_WARNINGS" if source_warning else "COMPLETE"),
+        "source_warning": source_warning,
         "watcher_health": {"expected_live": expected_live, "active_live": active_live_watchers,
                            "healthy": expected_live == active_live_watchers},
         "leagues": by_league, "source_errors": unavailable, "source_disagreements": disagreements,
-        "missing": [row.as_dict() for row in matches if row.watcher_status not in {"WAITING", "LIVE"}],
+        "missing": [row.as_dict() for row in matches if row.market_mapping_status != "MATCHED" or
+                    row.watcher_status not in {"WAITING", "LIVE", "FINISHED"}],
         "matches": [row.as_dict() for row in matches], "monitoring_recovery": watcher["recovery"],
     }
 

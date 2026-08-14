@@ -88,6 +88,16 @@ class PolymarketClient:
         rows = self.markets(limit=limit)
         return [m for m in rows if needle in f"{m.get('question', '')} {m.get('description', '')}".casefold()]
 
+    def public_search(self, query: str, *, include_closed: bool = True, limit: int = 10) -> list[dict[str, Any]]:
+        """Search active/recently closed events for schedule backfill and audit reconciliation."""
+        payload = get_json(
+            f"{GAMMA}/public-search",
+            {"q": query, "limit_per_type": limit, "keep_closed_markets": 1 if include_closed else 0,
+             "search_profiles": "false"},
+            self.timeout,
+        )
+        return list(payload.get("events") or [])
+
     def lol_events(self, *, limit: int = 100) -> list[dict[str, Any]]:
         """Active LoL events. Tag 65 is Polymarket's primary LoL tag."""
         return self.all_events_by_tag("65", page_size=limit)

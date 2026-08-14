@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Any, Callable
 
+from .live_engine import LiveAlert
+
 from .providers.http import post_json
 
 
@@ -102,7 +104,8 @@ def format_daily_report(report: dict[str, Any], report_date: date | None = None)
         "【赛事覆盖检查】",
         *(f"{sport.upper()}：已捕获 {value.get('discovered', 0)} / 预计 {value.get('expected', 0)}｜"
           f"市场 {value.get('market_matched', 0)}｜监控 {value.get('watching', 0)}｜"
-          f"Coverage {float(value.get('coverage', 0)):.0%}"
+          f"Schedule Coverage {float(value.get('coverage', 0)):.0%}｜"
+          f"Market Coverage {float(value.get('market_coverage', 0)):.0%}"
           for sport, value in coverage.items()),
         f"总赛事：已捕获 {sum(value.get('discovered', 0) for value in coverage.values())} / 预计 {expected}｜正在监控 {watching}",
         *( ["🚨 DATA INCOMPLETE｜今日赛事存在未解释遗漏"] if incomplete else ["赛事覆盖：100% ✅"] ),
@@ -160,3 +163,22 @@ def format_daily_report(report: dict[str, Any], report_date: date | None = None)
     if risks:
         lines.append("风险提示：" + "；".join(str(x) for x in risks))
     return "\n".join(lines).strip()
+
+
+def format_live_alert(alert: LiveAlert | dict[str, Any]) -> str:
+    row = alert.as_dict() if isinstance(alert, LiveAlert) else alert
+    icon = "🔴" if row.get("severity") == "EMERGENCY" else "🟠" if row.get("severity") == "IMPORTANT" else "🟡"
+    category = {
+        "MARKET_ANOMALY": "盘口异常", "MAJOR_EVENT": "重大事件", "PROBABILITY_CHANGE": "概率变化",
+        "NEWS_ALERT": "阵容 / 新闻异常",
+    }.get(str(row.get("category")), str(row.get("category")))
+    return "\n".join([
+        f"{icon}【{category}】",
+        f"{str(row.get('sport', '')).upper()}｜{row.get('title')}",
+        f"Alert Score：{float(row.get('alert_score', 0)):.0f}/100｜级别：{row.get('severity')}",
+        str(row.get("summary") or ""),
+        "关键原因：",
+        *(f"• {reason}" for reason in row.get("reasons", [])),
+        "",
+        "研究监控信号，不构成下注建议。",
+    ]).strip()

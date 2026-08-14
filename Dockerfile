@@ -7,6 +7,7 @@ WORKDIR /app
 COPY pyproject.toml README.md ./
 COPY src ./src
 COPY scripts ./scripts
+COPY config ./config
 RUN python -m pip install --no-cache-dir .
 
 RUN useradd --create-home --uid 10001 prediction \

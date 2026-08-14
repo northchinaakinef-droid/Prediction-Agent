@@ -10,7 +10,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from prediction_agent.delivery import FeishuAppClient, FeishuWebhookClient, format_daily_report
+from prediction_agent.delivery import FeishuAppClient, FeishuWebhookClient, format_daily_report, format_live_alert
+from prediction_agent.live_runtime import LiveSupervisor
 from prediction_agent.sports_daily import run_all
 from prediction_agent.paper_store import record_report, settle_pending
 
@@ -18,8 +19,10 @@ from prediction_agent.paper_store import record_report, settle_pending
 ROOT = Path(__file__).resolve().parents[1]
 STATE = {"started_at": datetime.now(timezone.utc).isoformat(), "last_run": None,
          "last_ok": None, "last_scan": None, "last_push": None,
-         "error": None, "paper_store": None, "paper_settlement": None}
+         "error": None, "paper_store": None, "paper_settlement": None,
+         "live": None, "live_error": None}
 RUN_LOCK = threading.Lock()
+LIVE_SOURCE_SIGNATURE = None
 
 
 def _send(report: dict) -> None:
@@ -32,6 +35,19 @@ def _send(report: dict) -> None:
     missing = [name for name in required if not os.getenv(name)]
     if missing:
         raise RuntimeError("missing Feishu configuration: " + ", ".join(missing))
+    FeishuAppClient(os.environ["FEISHU_APP_ID"], os.environ["FEISHU_APP_SECRET"],
+                    os.environ["FEISHU_RECEIVE_ID"],
+                    os.getenv("FEISHU_RECEIVE_ID_TYPE", "open_id")).send_text(message)
+
+
+def _send_message(message: str) -> None:
+    if os.getenv("FEISHU_WEBHOOK_URL"):
+        FeishuWebhookClient(os.environ["FEISHU_WEBHOOK_URL"],
+                            os.getenv("FEISHU_WEBHOOK_SECRET") or None).send_text(message)
+        return
+    required = ("FEISHU_APP_ID", "FEISHU_APP_SECRET", "FEISHU_RECEIVE_ID")
+    if any(not os.getenv(name) for name in required):
+        return
     FeishuAppClient(os.environ["FEISHU_APP_ID"], os.environ["FEISHU_APP_SECRET"],
                     os.environ["FEISHU_RECEIVE_ID"],
                     os.getenv("FEISHU_RECEIVE_ID_TYPE", "open_id")).send_text(message)
@@ -95,6 +111,25 @@ def paper_scheduler() -> None:
         time.sleep(minutes * 60)
 
 
+def live_scheduler() -> None:
+    global LIVE_SOURCE_SIGNATURE
+    supervisor = LiveSupervisor(root=ROOT, on_alert=lambda alert: _send_message(format_live_alert(alert)))
+    interval = max(10, int(os.getenv("LIVE_SCAN_SECONDS", "30")))
+    while True:
+        try:
+            result = supervisor.scan_once()
+            STATE["live"] = result
+            STATE["live_error"] = None
+            unavailable = tuple(sorted(result.get("unavailable_sources", [])))
+            if unavailable and unavailable != LIVE_SOURCE_SIGNATURE:
+                _send_message("🚨【实时数据源异常】\nDATA_UNAVAILABLE：" + "、".join(unavailable) +
+                              "\n系统不会把数据不可用解释为没有比赛。")
+            LIVE_SOURCE_SIGNATURE = unavailable
+        except Exception as error:
+            STATE["live_error"] = repr(error)
+        time.sleep(interval)
+
+
 class Health(BaseHTTPRequestHandler):
     def do_GET(self):  # noqa: N802
         if self.path not in {"/", "/health"}:
@@ -114,6 +149,7 @@ class Health(BaseHTTPRequestHandler):
 def main() -> None:
     threading.Thread(target=scheduler, daemon=True).start()
     threading.Thread(target=paper_scheduler, daemon=True).start()
+    threading.Thread(target=live_scheduler, daemon=True).start()
     ThreadingHTTPServer(("0.0.0.0", int(os.getenv("PORT", "8080"))), Health).serve_forever()
 
 

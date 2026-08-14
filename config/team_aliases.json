@@ -12,5 +12,8 @@
   {"sport":"lol","team_id":"SHFT","canonical_name":"Shifters","aliases":["SHFT"],"league":"LEC","region":"EU"},
   {"sport":"lol","team_id":"SK","canonical_name":"SK Gaming","aliases":["SK"],"league":"LEC","region":"EU"},
   {"sport":"lol","team_id":"MVK","canonical_name":"MVK Esports","aliases":["MVK"],"league":"LCP","region":"APAC"},
-  {"sport":"lol","team_id":"CFO","canonical_name":"CTBC Flying Oyster","aliases":["CFO"],"league":"LCP","region":"APAC"}
+  {"sport":"lol","team_id":"CFO","canonical_name":"CTBC Flying Oyster","aliases":["CFO"],"league":"LCP","region":"APAC"},
+  {"sport":"cs2","team_id":"NIP","canonical_name":"Ninjas in Pyjamas","aliases":["NIP","Ninjas in Pajamas"],"league":"CS2","region":"EU"},
+  {"sport":"cs2","team_id":"BETBOOM","canonical_name":"BetBoom Team","aliases":["BetBoom","BB Team"],"league":"CS2","region":"EU"},
+  {"sport":"cs2","team_id":"FUT","canonical_name":"FUT Esports","aliases":["FUT"],"league":"CS2","region":"EU"}
 ]

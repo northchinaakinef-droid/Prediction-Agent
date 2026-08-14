@@ -69,7 +69,7 @@ def canonical_team(sport: str, name: str) -> str:
     if sport == "nba":
         return NBA.get(cleaned, cleaned)
     if sport == "cs2":
-        return CS2.get(cleaned, cleaned)
+        return resolve_team(sport, CS2.get(cleaned, cleaned))[0]
     if sport == "lol":
         return resolve_team(sport, cleaned)[0]
     return cleaned
