@@ -31,7 +31,20 @@ cd "$app_dir"
 docker compose build
 docker compose up -d
 docker compose ps
-sleep 5
-curl --fail --silent --show-error http://127.0.0.1:8080/health
-echo
+health=""
+ready="false"
+for _ in {1..24}; do
+  if health="$(curl --fail --silent --show-error http://127.0.0.1:8080/health 2>/dev/null)"; then
+    printf '%s\n' "$health"
+    echo "Initial live scan completed successfully."
+    ready="true"
+    break
+  fi
+  sleep 5
+done
+if [[ "$ready" != "true" ]]; then
+  echo "Service did not complete its initial live scan within 120 seconds." >&2
+  docker compose logs --tail=100 prediction-agent >&2
+  exit 1
+fi
 echo "PredictionAgent deployment complete."

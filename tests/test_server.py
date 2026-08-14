@@ -28,6 +28,15 @@ class ServerDeliveryTests(unittest.TestCase):
         client.send_post.assert_called_once()
         client.send_text.assert_called_once_with("实时告警")
 
+    def test_health_requires_completed_live_scan(self):
+        server = load_server_module()
+        server.STATE.update(error=None, live_error=None, live=None)
+        self.assertFalse(server._health_ready())
+        server.STATE["live"] = {"checked_at": "2026-08-14T00:00:00+00:00"}
+        self.assertTrue(server._health_ready())
+        server.STATE["live_error"] = "source loop crashed"
+        self.assertFalse(server._health_ready())
+
 
 if __name__ == "__main__":
     unittest.main()
