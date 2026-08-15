@@ -271,6 +271,17 @@ class LiveStore:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def legacy_prematch_dedupe_rows(self) -> list[dict[str, str]]:
+        """Return pre-match alerts stored under the old match_id-based key."""
+        with self.connect() as db:
+            rows = db.execute(
+                """SELECT dedupe_key, MIN(observed_at) AS observed_at, alert_json
+                   FROM live_alerts
+                   WHERE dedupe_key LIKE '%:PREMATCH_ANALYSIS'
+                   GROUP BY dedupe_key"""
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     def ensure_alert_marker(self, dedupe_key: str, observed_at: str) -> None:
         with self.connect() as db:
             db.execute(

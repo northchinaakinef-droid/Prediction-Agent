@@ -33,6 +33,7 @@ class LiveSupervisor:
         self.on_alert = on_alert
         self.store = LiveStore(os.getenv("LIVE_DB_PATH", str(self.root / "data" / "daily" / "live.db")))
         self._collapse_legacy_postmatch_dedupe()
+        self._collapse_legacy_prematch_dedupe()
         self.engine = LiveAnalysisEngine(self.store)
         self.polymarket = PolymarketClient(timeout=15)
         self.source_status: dict[str, dict] = {}
@@ -49,6 +50,27 @@ class LiveSupervisor:
         for row in self.store.legacy_postmatch_dedupe_keys():
             dedupe_key = str(row.get("dedupe_key") or "")
             marker = dedupe_key.split(":POSTMATCH_REVIEW:", 1)[0] + ":POSTMATCH_REVIEW"
+            if marker != dedupe_key:
+                self.store.ensure_alert_marker(marker, str(row.get("observed_at") or ""))
+
+    def _collapse_legacy_prematch_dedupe(self) -> None:
+        """Map old match_id-based pre-match keys to the stable team-pair key.
+
+        Pre-match analysis previously used ``sport:{match_id}:PREMATCH_ANALYSIS``,
+        so a refreshed schedule could regenerate ``match_id`` and push the same
+        LoL/NBA match more than once. The stored alert JSON still contains the
+        canonical ``match_key``, which is the stable identity we use now.
+        """
+        for row in self.store.legacy_prematch_dedupe_rows():
+            dedupe_key = str(row.get("dedupe_key") or "")
+            try:
+                alert = json.loads(str(row.get("alert_json") or "{}"))
+            except json.JSONDecodeError:
+                continue
+            stable_key = str(alert.get("match_key") or "")
+            if not stable_key:
+                continue
+            marker = f"{stable_key}:PREMATCH_ANALYSIS"
             if marker != dedupe_key:
                 self.store.ensure_alert_marker(marker, str(row.get("observed_at") or ""))
 
@@ -129,9 +151,10 @@ class LiveSupervisor:
                 notes = [note for note in analyst_notes.get(sport, [])
                          if team_a.casefold() in str(note.title).casefold()
                          or team_b.casefold() in str(note.title).casefold()]
+                match_identity = f"{sport}:{':'.join(sorted(wanted))}"
                 alerts.append(LiveAlert(
-                    f"{sport}:{':'.join(sorted(wanted))}", sport, "IMPORTANT", 55, "PREMATCH_ANALYSIS",
-                    title, summary, reasons, now, f"{sport}:{match.get('match_id')}:PREMATCH_ANALYSIS",
+                    match_identity, sport, "IMPORTANT", 55, "PREMATCH_ANALYSIS",
+                    title, summary, reasons, now, f"{match_identity}:PREMATCH_ANALYSIS",
                     {
                         "outcome": outcome,
                         "team_a": team_a,
