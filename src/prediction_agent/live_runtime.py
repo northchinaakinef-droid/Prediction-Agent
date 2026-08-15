@@ -30,10 +30,25 @@ class LiveSupervisor:
         self.root = Path(root)
         self.on_alert = on_alert
         self.store = LiveStore(os.getenv("LIVE_DB_PATH", str(self.root / "data" / "daily" / "live.db")))
+        self._collapse_legacy_postmatch_dedupe()
         self.engine = LiveAnalysisEngine(self.store)
         self.polymarket = PolymarketClient(timeout=15)
         self.source_status: dict[str, dict] = {}
         self.missing_watchers: set[str] = set()
+
+    def _collapse_legacy_postmatch_dedupe(self) -> None:
+        """Make pre-fix post-match review alerts visible under the stable key.
+
+        Older versions appended ``state.observed_at`` to the POSTMATCH_REVIEW
+        dedupe key, so a restart with the fixed key would otherwise push each
+        finished match one more time before settling down. Collapse those
+        legacy keys into the stable per-match key once at startup.
+        """
+        for row in self.store.legacy_postmatch_dedupe_keys():
+            dedupe_key = str(row.get("dedupe_key") or "")
+            marker = dedupe_key.split(":POSTMATCH_REVIEW:", 1)[0] + ":POSTMATCH_REVIEW"
+            if marker != dedupe_key:
+                self.store.ensure_alert_marker(marker, str(row.get("observed_at") or ""))
 
     def _report(self) -> dict:
         path = self.root / "reports" / "daily.json"

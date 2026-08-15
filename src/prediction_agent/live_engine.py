@@ -261,6 +261,27 @@ class LiveStore:
                  json.dumps(asdict(market), ensure_ascii=False, default=str)),
             )
 
+    def legacy_postmatch_dedupe_keys(self) -> list[dict[str, str]]:
+        with self.connect() as db:
+            rows = db.execute(
+                """SELECT dedupe_key, MIN(observed_at) AS observed_at
+                   FROM live_alerts
+                   WHERE dedupe_key LIKE '%:POSTMATCH_REVIEW:%'
+                   GROUP BY dedupe_key"""
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def ensure_alert_marker(self, dedupe_key: str, observed_at: str) -> None:
+        with self.connect() as db:
+            db.execute(
+                """INSERT INTO live_alerts(dedupe_key, observed_at, alert_json)
+                   SELECT ?, ?, '{}'
+                   WHERE NOT EXISTS (
+                       SELECT 1 FROM live_alerts WHERE dedupe_key = ?
+                   )""",
+                (dedupe_key, observed_at, dedupe_key),
+            )
+
     def alert_recent(self, dedupe_key: str, cooldown_seconds: int) -> bool:
         cutoff = datetime.now(timezone.utc).timestamp() - cooldown_seconds
         with self.connect() as db:
