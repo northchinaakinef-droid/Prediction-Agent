@@ -332,7 +332,7 @@ class LeaguepediaDraftProvider:
             "where": f"SG.DateTime_UTC >= '{since}'", "order_by": "SG.DateTime_UTC DESC",
         }, headers={"User-Agent": "PredictionAgent/0.2"})
         targets = tuple(value.strip().casefold() for value in os.getenv(
-            "LOL_TARGET_LEAGUES", "LPL,LCK,LEC,LCS,LTA,LCP,MSI,Worlds,First Stand"
+            "LOL_TARGET_LEAGUES", "LPL,LCK,LEC,LCS,LTA,LCP,MSI,Worlds,First Stand,EWC,Esports World Cup"
         ).split(",") if value.strip())
         rows = []
         for result in payload.get("cargoquery", []):
@@ -344,11 +344,14 @@ class LeaguepediaDraftProvider:
             if len(champions_a) != 5 or len(champions_b) != 5:
                 continue
             finished = str(item.get("Winner") or "") in {"1", "2"}
+            features = {"champions_a": champions_a, "champions_b": champions_b,
+                        "draft_source_delayed": True}
+            if finished:
+                features["winner_side"] = "a" if str(item.get("Winner")) == "1" else "b"
             rows.append(LiveState(
                 "leaguepedia", str(item.get("GameId") or f"{item.get('Team1')}:{item.get('Team2')}"),
                 "lol", now, "FINISHED" if finished else "LIVE", str(item.get("Team1") or ""),
-                str(item.get("Team2") or ""), features={"champions_a": champions_a, "champions_b": champions_b,
-                                                          "draft_source_delayed": True}, finished=finished,
+                str(item.get("Team2") or ""), features=features, finished=finished,
             ))
         latest = {}
         for row in rows:

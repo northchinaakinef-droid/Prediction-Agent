@@ -13,7 +13,7 @@ from zoneinfo import ZoneInfo
 from prediction_agent.delivery import FeishuAppClient, FeishuWebhookClient, format_daily_post, format_live_alert
 from prediction_agent.live_runtime import LiveSupervisor
 from prediction_agent.sports_daily import run_all
-from prediction_agent.paper_store import record_report, settle_pending
+from prediction_agent.paper_store import record_report, settle_pending, summary as paper_summary
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -22,7 +22,6 @@ STATE = {"started_at": datetime.now(timezone.utc).isoformat(), "last_run": None,
          "error": None, "paper_store": None, "paper_settlement": None,
          "live": None, "live_error": None}
 RUN_LOCK = threading.Lock()
-LIVE_SOURCE_SIGNATURE = None
 SOURCE_LABELS = {
     "nba_official": "NBA 官方比分", "espn_nba": "ESPN NBA", "thesportsdb_nba": "TheSportsDB NBA",
     "riot_esports": "LoL 官方 BP", "pandascore_lol": "PandaScore LoL",
@@ -72,6 +71,7 @@ def run_once(*, notify: bool = True) -> None:
             paper_path = Path(os.getenv("PAPER_DB_PATH", str(ROOT / "data" / "daily" / "paper.db")))
             STATE["paper_settlement"] = settle_pending(paper_path)
             STATE["paper_store"] = record_report(paper_path, report)
+            report["paper_summary"] = paper_summary(paper_path)
             STATE["last_scan"] = datetime.now(timezone.utc).isoformat()
             if notify:
                 _send(report)
@@ -119,9 +119,19 @@ def paper_scheduler() -> None:
         time.sleep(minutes * 60)
 
 
+ALLOWED_LIVE_ALERT_CATEGORIES = {"PREMATCH_ANALYSIS", "DRAFT_ANALYSIS", "POSTMATCH_REVIEW"}
+
+
+def _send_valuable_alert(alert) -> None:
+    category = getattr(alert, "category", None)
+    if category is None and isinstance(alert, dict):
+        category = alert.get("category")
+    if category in ALLOWED_LIVE_ALERT_CATEGORIES:
+        _send_message(format_live_alert(alert))
+
+
 def live_scheduler() -> None:
-    global LIVE_SOURCE_SIGNATURE
-    supervisor = LiveSupervisor(root=ROOT, on_alert=lambda alert: _send_message(format_live_alert(alert)))
+    supervisor = LiveSupervisor(root=ROOT, on_alert=_send_valuable_alert)
     interval = max(10, int(os.getenv("LIVE_SCAN_SECONDS", "30")))
     while True:
         scan_started = time.monotonic()
@@ -129,12 +139,6 @@ def live_scheduler() -> None:
             result = supervisor.scan_once()
             STATE["live"] = result
             STATE["live_error"] = None
-            unavailable = tuple(sorted(result.get("unavailable_sources", [])))
-            if unavailable and unavailable != LIVE_SOURCE_SIGNATURE:
-                _send_message("🚨【实时数据源异常】\n当前不可用：" +
-                              "、".join(SOURCE_LABELS.get(name, name) for name in unavailable) +
-                              "\n系统不会把数据不可用解释为没有比赛。")
-            LIVE_SOURCE_SIGNATURE = unavailable
         except Exception as error:
             STATE["live_error"] = repr(error)
         time.sleep(max(1.0, interval - (time.monotonic() - scan_started)))

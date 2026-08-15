@@ -3,7 +3,10 @@ import unittest
 
 from prediction_agent.anomaly import detect_market_anomalies
 from prediction_agent.backtest import BacktestRow, run_backtest
-from prediction_agent.delivery import FeishuWebhookClient, format_daily_post, format_daily_report, webhook_signature
+from prediction_agent.delivery import (
+    FeishuWebhookClient, _display_team, _event_name, _format_draft_alert, _format_postmatch_alert,
+    _format_prematch_alert, format_daily_post, format_daily_report, format_live_alert, webhook_signature,
+)
 from prediction_agent.models import MarketSnapshot
 from prediction_agent.risk import normalize_two_way, recommend
 
@@ -109,6 +112,103 @@ class CoreTests(unittest.TestCase):
         self.assertLess(message.index("opportunity"), message.index("ordinary"))
         self.assertIn("符合策略", message)
         self.assertIn("模型胜率", message)
+
+
+    def test_event_name_strips_team_region_suffix(self):
+        self.assertEqual(_event_name("LNG Esports vs Ninjas in Pyjamas.CN"),
+                         "LNG Esports 对 Ninjas in Pyjamas")
+        self.assertEqual(_event_name("Ninjas in Pyjamas 对 LNG Esports"),
+                         "Ninjas in Pyjamas 对 LNG Esports")
+        self.assertEqual(_display_team("Ninjas in Pyjamas.CN"), "Ninjas in Pyjamas")
+        self.assertEqual(_display_team("Team WE (BO3) - LPL Group Ascend"), "Team WE")
+        self.assertEqual(_display_team("⁣Hooligans"), "Hooligans")
+
+    def test_live_alert_text_is_clear(self):
+        text = format_live_alert({
+            "severity": "IMPORTANT", "alert_score": 60, "category": "DRAFT_ANALYSIS",
+            "sport": "lol", "title": "LNG Esports vs Ninjas in Pyjamas.CN",
+            "summary": "当前概率暂不可用，比赛仍保持监控。",
+            "reasons": ["蓝方：K'Sante、Bel'Veth、Syndra、Lucian、Milio",
+                        "红方：Jayce、Trundle、Diana、Xayah、Rakan"],
+        })
+        self.assertIn("BP 完成分析", text)
+        self.assertIn("LNG Esports 对 Ninjas in Pyjamas", text)
+        self.assertNotIn(".CN", text)
+
+
+    def test_prematch_alert_formats_probability_and_reasons(self):
+        text = _format_prematch_alert({
+            "severity": "IMPORTANT", "alert_score": 55, "sport": "lol",
+            "title": "BLG vs WE",
+            "details": {
+                "outcome": "BLG", "blue_win_probability": .63, "red_win_probability": .37,
+                "blue_market_probability": .58, "red_market_probability": .42,
+                "reasons": ["confidence below threshold"],
+            },
+        })
+        self.assertIn("赛前分析", text)
+        self.assertIn("赛前预测方向", text)
+        self.assertIn("模型胜率", text)
+        self.assertIn("置信度未达到要求", text)
+
+    def test_postmatch_alert_compares_predictions(self):
+        text = _format_postmatch_alert({
+            "severity": "IMPORTANT", "alert_score": 70, "sport": "lol",
+            "title": "T1 vs Gen.G",
+            "details": {
+                "actual_winner": "Gen.G", "actual_side": "b",
+                "prematch_side": "a", "prematch_team": "T1",
+                "bp_side": "b", "bp_probability": .52,
+            },
+            "reasons": ["赛前预测：T1；判断错误。", "BP后预测：蓝方 52.0%｜红方 48.0%；判断正确。"],
+        })
+        self.assertIn("赛后复盘", text)
+        self.assertIn("实际胜者", text)
+        self.assertIn("赛前预测", text)
+        self.assertIn("判断：错误", text)
+        self.assertIn("判断：正确", text)
+
+    def test_draft_alert_includes_strength_and_risk_sections(self):
+        text = _format_draft_alert({
+            "severity": "IMPORTANT", "alert_score": 60, "sport": "lol",
+            "title": "LNG Esports vs Ninjas in Pyjamas",
+            "details": {
+                "blue_champions": ["Aatrox", "Bel'Veth", "Syndra", "Lucian", "Milio"],
+                "red_champions": ["Jayce", "Trundle", "Diana", "Xayah", "Rakan"],
+                "post_draft_probability": 0.58,
+                "readout": {
+                    "blue_team": "LNG Esports", "red_team": "Ninjas in Pyjamas",
+                    "team_edge": 45.0,
+                    "lanes": [
+                        {"role": "top", "blue_champion": "Aatrox", "red_champion": "Jayce", "edge": 20},
+                        {"role": "jng", "blue_champion": "Bel'Veth", "red_champion": "Trundle", "edge": 35},
+                        {"role": "mid", "blue_champion": "Syndra", "red_champion": "Diana", "edge": 55},
+                        {"role": "bot", "blue_champion": "Lucian", "red_champion": "Xayah", "edge": -30},
+                        {"role": "sup", "blue_champion": "Milio", "red_champion": "Rakan", "edge": -5},
+                    ],
+                },
+            },
+        })
+        self.assertIn("BP 后模型胜率", text)
+        self.assertIn("双方阵容", text)
+        self.assertIn("阵容优劣", text)
+        self.assertIn("配合与滚雪球", text)
+        self.assertIn("风险点", text)
+        self.assertIn("研究监控信号", text)
+        self.assertIn("亚托克斯", text)
+        self.assertIn("卑尔维斯", text)
+        self.assertIn("辛德拉", text)
+        self.assertIn("卢锡安", text)
+        self.assertIn("米利欧", text)
+        self.assertIn("杰斯", text)
+        self.assertIn("特朗德尔", text)
+        self.assertIn("黛安娜", text)
+        self.assertIn("霞", text)
+        self.assertIn("洛", text)
+        self.assertNotIn("Aatrox", text)
+        self.assertNotIn("K'Sante", text)
+        self.assertNotIn("Bel'Veth", text)
+        self.assertNotIn("Syndra", text)
 
 
 if __name__ == "__main__":

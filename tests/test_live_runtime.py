@@ -4,6 +4,7 @@ import tempfile
 import unittest
 import json
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from pathlib import Path
 
 from prediction_agent.live_engine import DynamicProbabilityEngine, match_key
@@ -31,7 +32,7 @@ class LiveRuntimeTests(unittest.TestCase):
         self.assertEqual(result.method, "LOL_POST_DRAFT_MODEL")
         self.assertAlmostEqual(result.current_probability, .64)
 
-    def test_lol_prematch_alert_is_emitted_from_schedule_even_without_analysis(self):
+    def test_lol_prematch_alert_is_suppressed_without_probability(self):
         now = datetime.now(timezone.utc)
         with tempfile.TemporaryDirectory() as temp:
             supervisor = LiveSupervisor(root=Path(temp))
@@ -41,9 +42,52 @@ class LiveRuntimeTests(unittest.TestCase):
                 "missing_reason": "market not found",
             }]}}, "recommendations": []}
             alerts = supervisor._prematch_alerts(report, now)
+        self.assertEqual(len(alerts), 0)
+
+    def test_lol_prematch_alert_includes_probability_details(self):
+        now = datetime.now(timezone.utc)
+        with tempfile.TemporaryDirectory() as temp:
+            supervisor = LiveSupervisor(root=Path(temp))
+            report = {
+                "schedule_coverage": {"lol": {"matches": [{
+                    "match_id": "m1", "team_a": "T1", "team_b": "Gen.G", "league": "LCK",
+                    "start_time": (now + timedelta(minutes=20)).isoformat(),
+                }]}},
+                "recommendations": [{
+                    "sport": "lol", "event": "T1 vs Gen.G", "outcome": "T1",
+                    "model_probability": .63, "market_probability": .58,
+                    "reasons": ["team strength edge"],
+                }],
+            }
+            alerts = supervisor._prematch_alerts(report, now)
         self.assertEqual(len(alerts), 1)
         self.assertEqual(alerts[0].category, "PREMATCH_ANALYSIS")
-        self.assertIn("不会将比赛隐藏", alerts[0].summary)
+        self.assertAlmostEqual(alerts[0].details["blue_win_probability"], .63)
+        self.assertAlmostEqual(alerts[0].details["red_win_probability"], .37)
+
+    def test_lol_result_review_alerts_compares_predictions(self):
+        now = datetime.now(timezone.utc)
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "reports").mkdir()
+            (root / "reports" / "daily.json").write_text(json.dumps({
+                "report_date": datetime.now(ZoneInfo("Asia/Singapore")).date().isoformat(),
+                "recommendations": [{
+                    "sport": "lol", "event": "T1 vs Gen.G", "outcome": "Gen.G",
+                    "model_probability": .58,
+                }],
+            }), encoding="utf-8")
+            supervisor = LiveSupervisor(root=root)
+            state = LiveState(
+                "leaguepedia", "g1", "lol", now, "FINISHED", "T1", "Gen.G",
+                features={"winner_side": "b", "post_draft_probability": .55},
+                finished=True,
+            )
+            alerts = supervisor._result_review_alerts([state], now)
+        self.assertEqual(len(alerts), 1)
+        self.assertEqual(alerts[0].category, "POSTMATCH_REVIEW")
+        self.assertIn("赛前预测", alerts[0].reasons[0])
+        self.assertIn("BP后预测", alerts[0].reasons[1])
 
     def test_nba_start_and_finish_lifecycle_alerts(self):
         now = datetime.now(timezone.utc)
@@ -74,6 +118,33 @@ class LiveRuntimeTests(unittest.TestCase):
             live = LiveState("nba", "1", "nba", now, "LIVE", "Lakers", "Celtics")
             recovered = supervisor._watcher_alerts(report, [live], now)
         self.assertEqual(recovered[0].category, "MONITORING_RECOVERY")
+
+
+    def test_draft_analysis_not_emitted_for_finished_match(self):
+        now = datetime.now(timezone.utc)
+        with tempfile.TemporaryDirectory() as temp:
+            supervisor = LiveSupervisor(root=Path(temp))
+            live = LiveState("draft", "g1", "lol", now, "FINISHED", "T1", "Gen.G",
+                             features={"champions_a": ["A", "B", "C", "D", "E"],
+                                       "champions_b": ["F", "G", "H", "I", "J"]}, finished=True)
+            alerts = supervisor._lifecycle_alerts([live], {match_key(live): None})
+        self.assertFalse(any(alert.category == "DRAFT_ANALYSIS" for alert in alerts))
+
+    def test_draft_analysis_emitted_once_per_new_draft(self):
+        now = datetime.now(timezone.utc)
+        with tempfile.TemporaryDirectory() as temp:
+            supervisor = LiveSupervisor(root=Path(temp))
+            live = LiveState("draft", "g1", "lol", now, "LIVE", "T1", "Gen.G",
+                             features={"champions_a": ["A", "B", "C", "D", "E"],
+                                       "champions_b": ["F", "G", "H", "I", "J"]})
+            first = supervisor._lifecycle_alerts([live], {match_key(live): None})
+            self.assertTrue(any(alert.category == "DRAFT_ANALYSIS" for alert in first))
+            previous = {"state_json": json.dumps({"features": {
+                "champions_a": ["A", "B", "C", "D", "E"],
+                "champions_b": ["F", "G", "H", "I", "J"],
+            }})}
+            again = supervisor._lifecycle_alerts([live], {match_key(live): previous})
+        self.assertFalse(any(alert.category == "DRAFT_ANALYSIS" for alert in again))
 
 
 if __name__ == "__main__":

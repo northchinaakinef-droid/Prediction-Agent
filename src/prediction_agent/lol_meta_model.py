@@ -98,6 +98,43 @@ class LolMetaModel:
                 + self._side_adjustment(game.patch))
         return self._elo_probability(diff)
 
+    def draft_readout(self, game: LolDraftGame) -> dict:
+        """Structured lane-by-lane draft readout for research-oriented alerts."""
+        post = self.predict_post_draft(game)
+        blue_players = game.blue_players or ()
+        red_players = game.red_players or ()
+        blue_champions = game.blue_champions or ()
+        red_champions = game.red_champions or ()
+        lanes = []
+        for index, role in enumerate(ROLES):
+            bp = blue_players[index] if index < len(blue_players) else ""
+            rp = red_players[index] if index < len(red_players) else ""
+            bc = blue_champions[index] if index < len(blue_champions) else ""
+            rc = red_champions[index] if index < len(red_champions) else ""
+            blue_prof = (self.player_champion_ratings.get(f"{bp}|{bc}", self.base_rating) - self.base_rating
+                         if bp and bc else 0.0)
+            red_prof = (self.player_champion_ratings.get(f"{rp}|{rc}", self.base_rating) - self.base_rating
+                        if rp and rc else 0.0)
+            blue_meta = (self.patch_champion_ratings.get(f"{game.patch}|{bc}", self.base_rating) - self.base_rating
+                         if bc else 0.0)
+            red_meta = (self.patch_champion_ratings.get(f"{game.patch}|{rc}", self.base_rating) - self.base_rating
+                        if rc else 0.0)
+            blue_rating = .65 * blue_prof + .35 * blue_meta
+            red_rating = .65 * red_prof + .35 * red_meta
+            lanes.append({
+                "role": role, "blue_champion": bc, "red_champion": rc,
+                "blue_player": bp, "red_player": rp,
+                "blue_proficiency": round(blue_prof, 1), "red_proficiency": round(red_prof, 1),
+                "blue_meta": round(blue_meta, 1), "red_meta": round(red_meta, 1),
+                "edge": round(blue_rating - red_rating, 1),
+            })
+        team_edge = self.team_ratings.get(game.blue_team, self.base_rating) - self.team_ratings.get(game.red_team, self.base_rating)
+        return {
+            "blue_team": game.blue_team, "red_team": game.red_team,
+            "patch": game.patch, "post_draft_blue_win": round(post, 4),
+            "team_edge": round(team_edge, 1), "lanes": lanes,
+        }
+
     def as_dict(self) -> dict:
         return asdict(self)
 

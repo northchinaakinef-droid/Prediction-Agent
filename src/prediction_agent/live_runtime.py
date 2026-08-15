@@ -16,7 +16,9 @@ from .providers.live_data import (
 )
 from .providers.polymarket import PolymarketClient
 from .providers.news import RssNewsProvider
+from .providers.analysts import AnalystFeedProvider
 from .lol_meta_model import LolDraftGame, load_lol_meta
+from .paper_store import record_post_match_review
 
 
 TAGS = {"nba": "745", "lol": "65", "cs2": "100780"}
@@ -59,39 +61,235 @@ class LiveSupervisor:
                   if snapshot.get("market_probability") is not None else "暂无对应市场")
         return f"当前模型胜率：{model}｜市场胜率：{market}"
 
-    def _prematch_alerts(self, report: dict, now: datetime) -> list[LiveAlert]:
+    def _prematch_alerts(self, report: dict, now: datetime,
+                         analyst_notes: dict[str, list] | None = None) -> list[LiveAlert]:
         lead = max(10, int(os.getenv("PREMATCH_PUSH_MINUTES", "30")))
-        recommendations = [row for row in report.get("recommendations", []) if row.get("sport") == "lol"]
-        audit = report.get("schedule_coverage", {}).get("lol", {})
+        analyst_notes = analyst_notes or {}
         alerts = []
-        for match in audit.get("matches", []):
-            try:
-                start = datetime.fromisoformat(str(match["start_time"]).replace("Z", "+00:00"))
-            except (KeyError, ValueError):
-                continue
-            if not now - timedelta(minutes=10) <= start <= now + timedelta(minutes=lead):
-                continue
-            wanted = {normalized_name(canonical_team("lol", str(match.get("team_a") or ""))),
-                      normalized_name(canonical_team("lol", str(match.get("team_b") or "")))}
-            row = next((candidate for candidate in recommendations if all(
-                name and name in normalized_name(str(candidate.get("event") or "")) for name in wanted
-            )), None)
-            title = f"{match.get('team_a')} vs {match.get('team_b')}"
-            if row and row.get("model_probability") is not None:
-                summary = (
-                    f"研究方向：{row.get('outcome') or '-'}｜赛前模型胜率：{float(row['model_probability']):.1%}｜"
-                    f"市场胜率：{float(row['market_probability']):.1%}"
-                    if row.get("market_probability") is not None else
-                    f"研究方向：{row.get('outcome') or '-'}｜赛前模型胜率：{float(row['model_probability']):.1%}｜市场暂无报价"
-                )
+        for sport in ("lol", "nba"):
+            recommendations = [row for row in report.get("recommendations", []) if row.get("sport") == sport]
+            audit = report.get("schedule_coverage", {}).get(sport, {})
+            for match in audit.get("matches", []):
+                try:
+                    start = datetime.fromisoformat(str(match["start_time"]).replace("Z", "+00:00"))
+                except (KeyError, ValueError):
+                    continue
+                if not now - timedelta(minutes=10) <= start <= now + timedelta(minutes=lead):
+                    continue
+                team_a = str(match.get("team_a") or "")
+                team_b = str(match.get("team_b") or "")
+                wanted = {normalized_name(canonical_team(sport, team_a)),
+                          normalized_name(canonical_team(sport, team_b))}
+                row = next((candidate for candidate in recommendations if all(
+                    name and name in normalized_name(str(candidate.get("event") or "")) for name in wanted
+                )), None)
+                if not row or row.get("model_probability") is None:
+                    continue
+                outcome = str(row.get("outcome") or "")
+                outcome_norm = normalized_name(canonical_team(sport, outcome))
+                team_a_norm = normalized_name(canonical_team(sport, team_a))
+                team_b_norm = normalized_name(canonical_team(sport, team_b))
+                if outcome_norm not in {team_a_norm, team_b_norm}:
+                    continue
+                model_probability = float(row["model_probability"])
+                blue_win_probability = (model_probability if outcome_norm == team_a_norm
+                                        else 1 - model_probability)
+                red_win_probability = 1 - blue_win_probability
+                market_probability = (float(row["market_probability"])
+                                      if row.get("market_probability") is not None else None)
+                blue_market_probability = None
+                red_market_probability = None
+                if market_probability is not None:
+                    blue_market_probability = (market_probability if outcome_norm == team_a_norm
+                                               else 1 - market_probability)
+                    red_market_probability = 1 - blue_market_probability
                 reasons = list(row.get("reasons", []))[:3]
+                title = f"{team_a} vs {team_b}"
+                summary = (
+                    f"赛前方向：{outcome}｜模型胜率：蓝方 {blue_win_probability:.1%}｜红方 {red_win_probability:.1%}"
+                )
+                notes = [note for note in analyst_notes.get(sport, [])
+                         if team_a.casefold() in str(note.title).casefold()
+                         or team_b.casefold() in str(note.title).casefold()]
+                alerts.append(LiveAlert(
+                    f"{sport}:{':'.join(sorted(wanted))}", sport, "IMPORTANT", 55, "PREMATCH_ANALYSIS",
+                    title, summary, reasons, now, f"{sport}:{match.get('match_id')}:PREMATCH_ANALYSIS",
+                    {
+                        "outcome": outcome,
+                        "team_a": team_a,
+                        "team_b": team_b,
+                        "blue_win_probability": blue_win_probability,
+                        "red_win_probability": red_win_probability,
+                        "blue_market_probability": blue_market_probability,
+                        "red_market_probability": red_market_probability,
+                        "reasons": reasons,
+                        "analyst_count": len(notes),
+                        "analyst_notes": [{"title": note.title, "link": note.link, "source": note.source}
+                                          for note in notes[:3]],
+                    },
+                ))
+        return alerts
+
+    @staticmethod
+    def _winner_side(state) -> str | None:
+        if state.score_a is not None and state.score_b is not None:
+            if state.score_a > state.score_b:
+                return "a"
+            if state.score_b > state.score_a:
+                return "b"
+        side = state.features.get("winner_side")
+        if side in {"a", "b"}:
+            return side
+        winner = str(state.features.get("winner") or "")
+        if winner:
+            if normalized_name(canonical_team(state.sport, winner)) == normalized_name(
+                canonical_team(state.sport, state.team_a)):
+                return "a"
+            if normalized_name(canonical_team(state.sport, winner)) == normalized_name(
+                canonical_team(state.sport, state.team_b)):
+                return "b"
+        return None
+
+    def _prematch_side(self, state) -> str | None:
+        report = self._report()
+        if not report:
+            return None
+        recommendations = [row for row in report.get("recommendations", []) if row.get("sport") == state.sport]
+        wanted = {normalized_name(canonical_team(state.sport, state.team_a)),
+                  normalized_name(canonical_team(state.sport, state.team_b))}
+        row = next((candidate for candidate in recommendations if all(
+            name and name in normalized_name(str(candidate.get("event") or "")) for name in wanted
+        )), None)
+        if not row or row.get("model_probability") is None:
+            return None
+        outcome_norm = normalized_name(canonical_team(state.sport, str(row.get("outcome") or "")))
+        team_a_norm = normalized_name(canonical_team(state.sport, state.team_a))
+        team_b_norm = normalized_name(canonical_team(state.sport, state.team_b))
+        if outcome_norm == team_a_norm:
+            return "a"
+        if outcome_norm == team_b_norm:
+            return "b"
+        return None
+
+    @staticmethod
+    def _decisive_factors(state) -> list[str]:
+        factors: list[str] = []
+        features = state.features or {}
+        if state.sport == "lol":
+            metrics = (
+                ("经济差", features.get("gold_a"), features.get("gold_b"), "gold"),
+                ("击杀差", features.get("kills_a"), features.get("kills_b"), "kills"),
+                ("防御塔差", features.get("towers_a"), features.get("towers_b"), "towers"),
+                ("小龙差", features.get("dragons_a"), features.get("dragons_b"), "dragons"),
+                ("大龙差", features.get("barons_a"), features.get("barons_b"), "barons"),
+                ("高地塔差", features.get("inhibitors_a"), features.get("inhibitors_b"), "inhibitors"),
+            )
+            rows = []
+            for label, a, b, _ in metrics:
+                if a is None or b is None:
+                    continue
+                diff = float(a) - float(b)
+                if abs(diff) < 1e-9:
+                    continue
+                side = "蓝方" if diff > 0 else "红方"
+                rows.append((abs(diff), f"{label} {diff:+.0f}（{side}占优）"))
+            factors = [text for _, text in sorted(rows, reverse=True)[:3]]
+        elif state.sport == "nba":
+            if state.score_a is not None and state.score_b is not None:
+                diff = float(state.score_a) - float(state.score_b)
+                side = "A队" if diff > 0 else "B队"
+                factors.append(f"最终分差 {diff:+.0f}（{side}占优）")
+        return factors
+
+    def _result_review_alerts(self, states: list, now: datetime,
+                               analyst_notes: dict[str, list] | None = None) -> list[LiveAlert]:
+        analyst_notes = analyst_notes or {}
+        alerts = []
+        for state in states:
+            if state.sport not in {"lol", "nba"}:
+                continue
+            if not (state.finished or str(state.status).casefold() in {"finished", "completed", "post", "final"}):
+                continue
+            actual_side = self._winner_side(state)
+            if actual_side is None:
+                continue
+            prematch_side = self._prematch_side(state)
+            bp_probability = state.features.get("post_draft_probability") if state.sport == "lol" else None
+            if prematch_side is None and bp_probability is None:
+                continue
+            actual_team = state.team_a if actual_side == "a" else state.team_b
+            bp_side = None
+            if bp_probability is not None:
+                bp_probability = float(bp_probability)
+                bp_side = "a" if bp_probability >= .5 else "b"
+            prematch_team = state.team_a if prematch_side == "a" else state.team_b if prematch_side == "b" else None
+            bp_team = state.team_a if bp_side == "a" else state.team_b if bp_side == "b" else None
+
+            reasons = []
+            if prematch_side is not None:
+                result = "正确" if prematch_side == actual_side else "错误"
+                reasons.append(f"赛前预测：{prematch_team}；判断{result}。")
             else:
-                summary = "比赛已发现，但当前没有满足条件的赛前概率；不会将比赛隐藏。"
-                reasons = [str(match.get("missing_reason") or "市场映射、阵容或模型数据不足")]
+                reasons.append("赛前预测：未生成有效概率。")
+            if bp_team is not None:
+                result = "正确" if bp_side == actual_side else "错误"
+                reasons.append(
+                    f"BP后预测：蓝方 {bp_probability:.1%}｜红方 {1-bp_probability:.1%}；判断{result}。"
+                )
+            if (prematch_side == actual_side) or (bp_side == actual_side):
+                reasons.append("复盘：比赛走势与预测方向一致，优势方按预期滚动并转化为胜利。")
+            else:
+                reasons.append("复盘：比赛走势偏离预测，需重点核查阵容克制、资源节奏或临场发挥。")
+
+            notes = [note for note in analyst_notes.get(state.sport, [])
+                     if state.team_a.casefold() in str(note.title).casefold()
+                     or state.team_b.casefold() in str(note.title).casefold()]
+            decisive_factors = self._decisive_factors(state)
+            key = match_key(state)
             alerts.append(LiveAlert(
-                f"lol:{':'.join(sorted(wanted))}", "lol", "OBSERVE", 30, "PREMATCH_ANALYSIS",
-                title, summary, reasons, now, f"lol:{match.get('match_id')}:PREMATCH_ANALYSIS",
+                key, state.sport, "IMPORTANT", 70, "POSTMATCH_REVIEW",
+                f"{state.team_a} vs {state.team_b}",
+                f"比赛已结束，实际胜者：{actual_team}。",
+                reasons, now, f"{key}:POSTMATCH_REVIEW:{state.observed_at.isoformat()}",
+                {
+                    "event_id": state.source_id,
+                    "actual_winner": actual_team,
+                    "team_a": state.team_a,
+                    "team_b": state.team_b,
+                    "score_a": state.score_a,
+                    "score_b": state.score_b,
+                    "actual_side": actual_side,
+                    "prematch_side": prematch_side,
+                    "prematch_team": prematch_team,
+                    "bp_side": bp_side,
+                    "bp_team": bp_team,
+                    "bp_probability": bp_probability,
+                    "analyst_count": len(notes),
+                    "analyst_notes": [{"title": note.title, "link": note.link, "source": note.source}
+                                      for note in notes[:3]],
+                    "decisive_factors": decisive_factors,
+                },
             ))
+        for alert in alerts:
+            if alert.category == "POSTMATCH_REVIEW":
+                details = alert.details or {}
+                record_post_match_review(
+                    os.getenv("PAPER_DB_PATH", str(self.root / "data" / "daily" / "paper.db")),
+                    {
+                        "sport": alert.sport,
+                        "event_id": details.get("event_id") or alert.match_key,
+                        "event": alert.title,
+                        "generated_at": now.isoformat(),
+                        "actual_winner": details.get("actual_winner"),
+                        "predicted_winner": details.get("prematch_team") or details.get("bp_team"),
+                        "prediction_correct": (details.get("prematch_side") == details.get("actual_side"))
+                                              if details.get("prematch_side") is not None
+                                              else (details.get("bp_side") == details.get("actual_side")),
+                        "model_probability": details.get("bp_probability"),
+                        "bp_probability": details.get("bp_probability"),
+                        "decisive_factors": details.get("decisive_factors", []),
+                    },
+                )
         return alerts
 
     def _lifecycle_alerts(self, states: list, previous: dict[str, dict | None]) -> list[LiveAlert]:
@@ -125,19 +323,37 @@ class LiveSupervisor:
                                             f"最终比分：{state.score_a:.0f} - {state.score_b:.0f}", [summary], state.observed_at,
                                             key + ":MATCH_FINISHED"))
             elif state.sport == "lol":
+                if state.finished or str(state.status).casefold() in {"finished", "completed", "post", "final"}:
+                    continue
                 champions_a = tuple(value for value in state.features.get("champions_a", []) if value)
                 champions_b = tuple(value for value in state.features.get("champions_b", []) if value)
                 if len(champions_a) == len(champions_b) == 5:
+                    before_champions_a = tuple(value for value in (before_state.get("features") or {}).get("champions_a", []) if value)
+                    before_champions_b = tuple(value for value in (before_state.get("features") or {}).get("champions_b", []) if value)
+                    if before_champions_a == champions_a and before_champions_b == champions_b:
+                        continue
                     draft_id = ":".join(sorted(champions_a + champions_b))
+                    post = state.features.get("post_draft_probability")
+                    readout = state.features.get("draft_readout")
+                    draft_summary = (f"BP 后模型胜率：蓝方 {post:.1%}｜红方 {1-post:.1%}"
+                                     if post is not None else summary)
+                    details = {
+                        "blue_champions": list(champions_a),
+                        "red_champions": list(champions_b),
+                        "post_draft_probability": post,
+                        "readout": readout,
+                    }
                     alerts.append(LiveAlert(
                         key, "lol", "IMPORTANT", 60, "DRAFT_ANALYSIS", state.team_a + " vs " + state.team_b,
-                        summary, ["蓝方：" + "、".join(champions_a), "红方：" + "、".join(champions_b)],
-                        state.observed_at, f"{key}:DRAFT:{draft_id}",
+                        draft_summary, ["蓝方：" + "、".join(champions_a), "红方：" + "、".join(champions_b)],
+                        state.observed_at, f"{key}:DRAFT:{draft_id}", details,
                     ))
         return alerts
 
     def _watcher_alerts(self, report: dict, states: list, now: datetime) -> list[LiveAlert]:
         grace = timedelta(minutes=max(5, int(os.getenv("WATCHER_START_GRACE_MINUTES", "10"))))
+        window = timedelta(minutes=max(30, int(os.getenv("WATCHER_MISSING_WINDOW_MINUTES", "240"))))
+        zone = ZoneInfo(os.getenv("REPORT_TIMEZONE", "Asia/Singapore"))
         active = {match_key(state) for state in states if state.status == "LIVE"}
         finished = {match_key(state) for state in states if state.status == "FINISHED" or state.finished}
         expected: dict[str, tuple[str, dict]] = {}
@@ -147,7 +363,7 @@ class LiveSupervisor:
                     start = datetime.fromisoformat(str(match["start_time"]).replace("Z", "+00:00"))
                 except (KeyError, ValueError):
                     continue
-                if start + grace <= now <= start + timedelta(hours=8) and str(match.get("event_status", "")).casefold() not in {
+                if start + grace <= now <= start + window and str(match.get("event_status", "")).casefold() not in {
                     "finished", "completed", "post", "final"
                 }:
                     teams = sorted((normalized_name(canonical_team(sport, str(match.get("team_a") or ""))),
@@ -157,10 +373,14 @@ class LiveSupervisor:
         alerts = []
         for key in sorted(missing - self.missing_watchers):
             sport, match = expected[key]
+            match_start = datetime.fromisoformat(str(match["start_time"]).replace("Z", "+00:00"))
+            start_display = match_start.astimezone(zone).strftime("%H:%M")
+            summary = (f"比赛预计 {start_display} 已开始，但当前没有活跃监控器；"
+                       "若比赛已结束可忽略本提醒。")
             alerts.append(LiveAlert(
                 key, sport, "EMERGENCY", 90, "WATCHER_MISSING",
                 f"{match.get('team_a')} vs {match.get('team_b')}",
-                "比赛预计已经开始，但没有活跃监控器。", ["已标记为数据不完整，正在持续重试。"], now,
+                summary, ["已标记为数据不完整，正在持续重试。"], now,
                 f"{key}:WATCHER_MISSING:{match.get('start_time')}",
             ))
         for key in sorted(self.missing_watchers - missing):
@@ -194,7 +414,7 @@ class LiveSupervisor:
         def riot_states():
             configured = [value.strip() for value in os.getenv("LOLESPORTS_LEAGUE_IDS", "").split(",") if value.strip()]
             target_names = [value.strip() for value in os.getenv(
-                "LOL_TARGET_LEAGUES", "LPL,LCK,LEC,LCS,LTA,LCP,MSI,Worlds,First Stand"
+                "LOL_TARGET_LEAGUES", "LPL,LCK,LEC,LCS,LTA,LCP,MSI,Worlds,First Stand,EWC,Esports World Cup"
             ).split(",") if value.strip()]
             league_ids = configured or riot.league_ids(target_names)
             if not league_ids:
@@ -296,6 +516,7 @@ class LiveSupervisor:
                 players_a, players_b, champions_a, champions_b, 0,
             )
             state.features["post_draft_probability"] = model.predict_post_draft(game)
+            state.features["draft_readout"] = model.draft_readout(game)
 
     def scan_once(self) -> dict:
         now = datetime.now(timezone.utc)
@@ -313,14 +534,28 @@ class LiveSupervisor:
             sport: self._attempt(f"polymarket_{sport}", lambda tag=tag: self.polymarket.all_events_by_tag(tag))
             for sport, tag in TAGS.items()
         }
+        analyst_notes = {
+            sport: self._attempt(f"analyst_{sport}", lambda s=sport: AnalystFeedProvider(s).recent())
+            for sport in ("lol", "nba")
+        }
+        for state in states:
+            notes = [note for note in analyst_notes.get(state.sport, [])
+                     if state.team_a.casefold() in note.title.casefold()
+                     or state.team_b.casefold() in note.title.casefold()]
+            if notes:
+                state.features["analyst_notes"] = [{"title": note.title, "link": note.link,
+                                                    "source": note.source} for note in notes[:5]]
         previous = {match_key(state): self.store.previous(match_key(state)) for state in states}
-        alerts = self.engine.process(states, market_events, self._priors(states, market_events),
+        priors = self._priors(states, market_events)
+        alerts = self.engine.process(states, market_events, priors,
                                      alert_sports={"nba", "cs2"})
         for alert in alerts:
             if self.on_alert:
                 self.on_alert(alert)
-        lifecycle = self._prematch_alerts(report, now) + self._lifecycle_alerts(states, previous) + self._watcher_alerts(
-            report, states, now)
+        lifecycle = (self._prematch_alerts(report, now, analyst_notes) +
+                     self._lifecycle_alerts(states, previous) +
+                     self._result_review_alerts(states, now, analyst_notes) +
+                     self._watcher_alerts(report, states, now))
         emitted_lifecycle = [alert for alert in lifecycle if self._emit_once(alert)]
         alerts.extend(emitted_lifecycle)
         incomplete = [name for name, status in self.source_status.items() if not status["available"]]

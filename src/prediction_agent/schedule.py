@@ -197,53 +197,66 @@ def reconcile_sources(results: Iterable[SourceResult]) -> tuple[list[CanonicalMa
     return sorted(expected, key=lambda row: row.start_time), disagreements
 
 
+def _team_pairing_similarity(wanted: tuple[str, str], actual: tuple[str, str]) -> float:
+    """Best two-way assignment similarity instead of relying on set ordering."""
+    direct = (SequenceMatcher(None, wanted[0], actual[0]).ratio() +
+              SequenceMatcher(None, wanted[1], actual[1]).ratio()) / 2
+    crossed = (SequenceMatcher(None, wanted[0], actual[1]).ratio() +
+               SequenceMatcher(None, wanted[1], actual[0]).ratio()) / 2
+    return max(direct, crossed)
+
+
 def _market_candidates(events: list[dict], sport: str) -> Iterable[tuple[dict, dict, datetime, list[str]]]:
     for event in events:
+        title = event.get("title")
         for market in event.get("markets", []):
-            if market.get("sportsMarketType") != "moneyline" or not market.get("gameStartTime"):
+            market_type = str(market.get("sportsMarketType") or "").casefold()
+            is_moneyline = market_type == "moneyline"
+            is_title_market = bool(title) and market.get("question") == title and market_type in {"", "none"}
+            if not (is_moneyline or is_title_market) or not market.get("gameStartTime"):
                 continue
             outcomes = market.get("outcomes", [])
             outcomes = json.loads(outcomes) if isinstance(outcomes, str) else outcomes
-            if len(outcomes) != 2:
+            if not isinstance(outcomes, list) or len(outcomes) != 2:
                 continue
             start = datetime.fromisoformat(str(market["gameStartTime"]).replace("Z", "+00:00"))
             yield event, market, start, [canonical_team(sport, str(value)) for value in outcomes]
 
 
 def match_markets(matches: list[CanonicalMatch], events: list[dict]) -> None:
+    if not matches:
+        return
+    candidates_by_sport: dict[str, list[tuple[dict, dict, datetime, list[str]]]] = {}
+    for sport in {item.sport for item in matches}:
+        candidates_by_sport[sport] = list(_market_candidates(events, sport))
+
     for item in matches:
-        candidates = list(_market_candidates(events, item.sport))
-        scored = []
-        reviews = []
-        wanted = {normalized_name(item.team_a), normalized_name(item.team_b)}
-        for event, market, start, teams in candidates:
-            actual = {normalized_name(value) for value in teams}
+        wanted = tuple(sorted((normalized_name(item.team_a), normalized_name(item.team_b))))
+        scored: list[tuple[float, dict, dict]] = []
+        reviews: list[tuple[float, dict, dict]] = []
+        for event, market, start, teams in candidates_by_sport.get(item.sport, []):
             if abs((item.start_time - start).total_seconds()) > 90 * 60:
                 continue
-            if wanted == actual:
-                scored.append((event, market))
-                continue
-            left, right = list(wanted), list(actual)
-            direct = (SequenceMatcher(None, left[0], right[0]).ratio() +
-                      SequenceMatcher(None, left[1], right[1]).ratio()) / 2
-            crossed = (SequenceMatcher(None, left[0], right[1]).ratio() +
-                       SequenceMatcher(None, left[1], right[0]).ratio()) / 2
-            similarity = max(direct, crossed)
+            actual = tuple(sorted(normalized_name(value) for value in teams))
+            similarity = 1.0 if wanted == actual else _team_pairing_similarity(wanted, actual)
             if similarity >= 0.92:
-                scored.append((event, market))
+                scored.append((similarity, event, market))
             elif similarity >= 0.75:
-                reviews.append((event, market, similarity))
+                reviews.append((similarity, event, market))
         if len(scored) == 1:
-            event, market = scored[0]
+            _, event, market = scored[0]
             item.market_id = str(market.get("id") or event.get("id"))
             item.market_mapping_status = "MATCHED"
             item.missing_stage = None
             item.missing_reason = None
-        elif len(scored) > 1 or reviews:
+        elif scored or reviews:
+            item.market_id = None
             item.market_mapping_status = "MARKET_MAPPING_REVIEW"
             item.missing_stage = "market_mapping"
             item.missing_reason = "ambiguous or below-threshold fuzzy market mapping"
         else:
+            item.market_id = None
+            item.market_mapping_status = "MARKET_NOT_FOUND"
             item.missing_stage = "market_mapping"
             item.missing_reason = "Polymarket moneyline market not found"
 
@@ -312,6 +325,8 @@ def build_schedule_audit(results: list[SourceResult], market_events: list[dict],
     accounted = watching + sum(row.watcher_status == "FINISHED" for row in matches)
     incomplete = bool(insufficient_sources or matched < total or accounted < total)
     source_warning = bool(disagreements or unavailable)
+    source_disagreement_warning = bool(disagreements)
+    source_unavailable_warning = bool(unavailable)
     expected_live = sum(row.start_time <= now and row.watcher_status != "FINISHED" for row in matches)
     active_live_watchers = sum(row.watcher_status == "LIVE" for row in matches)
     return {
@@ -325,6 +340,8 @@ def build_schedule_audit(results: list[SourceResult], market_events: list[dict],
         "data_incomplete": incomplete,
         "status": "DATA_INCOMPLETE" if incomplete else ("COMPLETE_WITH_SOURCE_WARNINGS" if source_warning else "COMPLETE"),
         "source_warning": source_warning,
+        "source_disagreement_warning": source_disagreement_warning,
+        "source_unavailable_warning": source_unavailable_warning,
         "watcher_health": {"expected_live": expected_live, "active_live": active_live_watchers,
                            "healthy": expected_live == active_live_watchers},
         "leagues": by_league, "source_errors": unavailable, "source_disagreements": disagreements,

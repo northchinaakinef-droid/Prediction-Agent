@@ -74,5 +74,40 @@ class ScheduleTests(unittest.TestCase):
         self.assertIsNone(match.market_id)
 
 
+    def test_market_matching_handles_reversed_outcomes(self):
+        start = datetime(2026, 8, 14, 8, tzinfo=timezone.utc)
+        match = make_match(source="a", league="LCK", team_a="T1", team_b="DK",
+                           start_time=start, event_name="LCK")
+        events = [{"id": "e1", "markets": [{
+            "id": "m1", "sportsMarketType": "moneyline", "gameStartTime": start.isoformat(),
+            "outcomes": '["Dplus KIA", "T1"]',
+        }]}]
+        match_markets([match], events)
+        self.assertEqual(match.market_mapping_status, "MATCHED")
+
+    def test_market_matching_accepts_case_insensitive_type(self):
+        start = datetime(2026, 8, 14, 8, tzinfo=timezone.utc)
+        match = make_match(source="a", league="LCK", team_a="T1", team_b="DK",
+                           start_time=start, event_name="LCK")
+        events = [{"id": "e1", "markets": [{
+            "id": "m1", "sportsMarketType": "Moneyline", "gameStartTime": start.isoformat(),
+            "outcomes": '["T1", "Dplus KIA"]',
+        }]}]
+        match_markets([match], events)
+        self.assertEqual(match.market_mapping_status, "MATCHED")
+
+
+    def test_lol_aliases_merge_abbreviation_and_full_name(self):
+        start = datetime(2026, 8, 14, 8, tzinfo=timezone.utc)
+        a = make_match(source="a", league="LPL", team_a="NIP", team_b="LNG",
+                       start_time=start, event_name="LPL")
+        b = make_match(source="b", league="LPL", team_a="Ninjas in Pyjamas", team_b="LNG Esports",
+                       start_time=start, event_name="LPL")
+        expected, disagreements = reconcile_sources([SourceResult("a", True, [a]), SourceResult("b", True, [b])])
+        self.assertEqual(len(expected), 1)
+        self.assertFalse(disagreements)
+        self.assertEqual({expected[0].team_a, expected[0].team_b}, {"Ninjas in Pyjamas", "LNG Esports"})
+
+
 if __name__ == "__main__":
     unittest.main()

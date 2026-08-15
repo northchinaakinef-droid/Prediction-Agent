@@ -19,5 +19,20 @@ class LolMetaModelTests(unittest.TestCase):
         self.assertNotEqual(model.predict_pre_draft(game), model.predict_post_draft(game))
 
 
+    def test_draft_readout_lists_lane_edges(self):
+        games = []
+        for index in range(30):
+            games.append(LolDraftGame(
+                str(index), datetime(2024, 1, 1, tzinfo=timezone.utc), "14.01", "LCK", "A", "B",
+                ("a1", "a2", "a3", "a4", "a5"), ("b1", "b2", "b3", "b4", "b5"),
+                ("c1", "c2", "c3", "c4", "c5"), ("d1", "d2", "d3", "d4", "d5"), 1))
+        model = fit_lol_meta(games)
+        readout = model.draft_readout(games[-1])
+        self.assertEqual(len(readout["lanes"]), 5)
+        self.assertEqual(readout["lanes"][0]["role"], "top")
+        self.assertIn("post_draft_blue_win", readout)
+        self.assertIn("team_edge", readout)
+
+
 if __name__ == "__main__":
     unittest.main()
