@@ -1,5 +1,7 @@
 from datetime import datetime, timedelta, timezone
+import os
 import unittest
+from unittest.mock import patch
 
 from prediction_agent.sports_daily import _find_schedule_match, _is_major_cs2_event, _is_major_lol_event, _probability_sanity, _research_row
 
@@ -65,6 +67,30 @@ class SportsDailyTests(unittest.TestCase):
         self.assertFalse(row["schedule_matched"])
         self.assertEqual(row["market_mapping_status"], "NOT_IN_SCHEDULE")
 
+
+    def test_paper_trading_enabled_allows_virtual_bet_without_probability_approval(self):
+        now = datetime(2026, 1, 1, 12, tzinfo=timezone.utc)
+        market = {"liquidity": 1000, "spread": .01, "bestBid": .60, "bestAsk": .60}
+        with patch.dict(os.environ, {"PAPER_TRADING_ENABLED": "true"}):
+            row = _research_row(
+                "cs2", {"id": "e1", "title": "A vs B"}, market,
+                now + timedelta(hours=1), ["A", "B"], [.60, .40], [.80, .20],
+                probability_ok=False, money_ok=False, now=now, bankroll=1000, reasons=[],
+            )
+        self.assertEqual(row["action"], "BET")
+        self.assertFalse(row["real_money_approved"])
+        self.assertGreater(float(row["stake"]), 0)
+
+    def test_paper_trading_disabled_keeps_no_bet_without_probability_approval(self):
+        now = datetime(2026, 1, 1, 12, tzinfo=timezone.utc)
+        market = {"liquidity": 1000, "spread": .01, "bestBid": .60, "bestAsk": .60}
+        with patch.dict(os.environ, {"PAPER_TRADING_ENABLED": "false"}):
+            row = _research_row(
+                "cs2", {"id": "e1", "title": "A vs B"}, market,
+                now + timedelta(hours=1), ["A", "B"], [.60, .40], [.80, .20],
+                probability_ok=False, money_ok=False, now=now, bankroll=1000, reasons=[],
+            )
+        self.assertEqual(row["action"], "NO_BET")
 
 if __name__ == "__main__":
     unittest.main()
