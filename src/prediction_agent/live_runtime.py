@@ -251,7 +251,7 @@ class LiveSupervisor:
                 key, state.sport, "IMPORTANT", 70, "POSTMATCH_REVIEW",
                 f"{state.team_a} vs {state.team_b}",
                 f"比赛已结束，实际胜者：{actual_team}。",
-                reasons, now, f"{key}:POSTMATCH_REVIEW:{state.observed_at.isoformat()}",
+                reasons, now, f"{key}:POSTMATCH_REVIEW",
                 {
                     "event_id": state.source_id,
                     "actual_winner": actual_team,
