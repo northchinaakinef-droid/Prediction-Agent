@@ -136,12 +136,22 @@ def _sport_name(value: Any) -> str:
     return SPORT_NAMES.get(key, str(value or "未知项目").upper())
 
 
+def _display_team(value: Any) -> str:
+    """Clean provider team labels like `Ninjas in Pyjamas.CN` for display only."""
+    text = str(value or "").strip()
+    text = re.sub(r"\.(CN|EU|KR|NA|TW|VN|JP|OCE|BR|TR|CIS|MENA|LATAM|SEA|AM|US|UK|AU)\b.*$", "", text)
+    return " ".join(text.split()) or str(value or "未知队伍")
+
+
 def _event_name(value: Any) -> str:
     text = str(value or "未知赛事")
     for prefix in ("LoL: ", "LOL: ", "CS2: ", "NBA: "):
         if text.startswith(prefix):
             text = text.removeprefix(prefix)
-    return text.replace(" vs ", " 对 ")
+    parts = re.split(r"\s*(?:vs\.?|VS\.?|对)\s*", text, maxsplit=1, flags=re.I)
+    if len(parts) == 2:
+        return f"{_display_team(parts[0])} 对 {_display_team(parts[1])}"
+    return _display_team(text)
 
 
 def _zh_reason(reason: Any) -> str:
@@ -219,15 +229,24 @@ def format_daily_report(report: dict[str, Any], report_date: date | None = None)
         "",
     ]
     for sport, value in coverage.items():
-        if value.get("source_warning"):
+        if value.get("source_disagreement_warning"):
             lines.append(f"⚠️ {_sport_name(sport)}：多个赛程源结果不一致，请查看赛程审计。")
+        elif value.get("source_unavailable_warning"):
+            lines.append(f"⚠️ {_sport_name(sport)}：部分赛程源不可用，请查看赛程审计。")
         for missing in value.get("missing", []):
             lines.append(
                 f"• 遗漏：{missing.get('league')}｜{missing.get('team_a')} 对 {missing.get('team_b')}｜"
                 f"阶段：{missing.get('missing_stage') or missing.get('watcher_status') or '未知'}｜"
                 f"原因：{missing.get('missing_reason') or '监控器不可用'}"
             )
+    schedule_matched = sum(bool(row.get("schedule_matched")) for row in rows)
+    market_only = len(rows) - schedule_matched
+    suspicious = sum(not bool(row.get("probability_plausible", True)) for row in rows)
     lines.extend(["", "【研究结论】", f"分析 {len(rows)} 场｜符合策略 {opportunities} 场｜其余仅观察"])
+    lines.append(f"赛程匹配 {schedule_matched} 场｜市场独有 {market_only} 场"
+                 f"{'｜概率可疑 ' + str(suspicious) + ' 场' if suspicious else ''}")
+    if market_only:
+        lines.append("• 市场独有：该赛事仅在 Polymarket 出现，未在赛程源确认，可能存在映射或队名不一致。")
     if not rows:
         lines.append("暂无达到策略与风控要求的机会。")
     for index, row in enumerate(rows, 1):

@@ -3,7 +3,10 @@ import unittest
 
 from prediction_agent.anomaly import detect_market_anomalies
 from prediction_agent.backtest import BacktestRow, run_backtest
-from prediction_agent.delivery import FeishuWebhookClient, format_daily_post, format_daily_report, webhook_signature
+from prediction_agent.delivery import (
+    FeishuWebhookClient, _display_team, _event_name, format_daily_post, format_daily_report,
+    format_live_alert, webhook_signature,
+)
 from prediction_agent.models import MarketSnapshot
 from prediction_agent.risk import normalize_two_way, recommend
 
@@ -109,6 +112,26 @@ class CoreTests(unittest.TestCase):
         self.assertLess(message.index("opportunity"), message.index("ordinary"))
         self.assertIn("符合策略", message)
         self.assertIn("模型胜率", message)
+
+
+    def test_event_name_strips_team_region_suffix(self):
+        self.assertEqual(_event_name("LNG Esports vs Ninjas in Pyjamas.CN"),
+                         "LNG Esports 对 Ninjas in Pyjamas")
+        self.assertEqual(_event_name("Ninjas in Pyjamas 对 LNG Esports"),
+                         "Ninjas in Pyjamas 对 LNG Esports")
+        self.assertEqual(_display_team("Ninjas in Pyjamas.CN"), "Ninjas in Pyjamas")
+
+    def test_live_alert_text_is_clear(self):
+        text = format_live_alert({
+            "severity": "IMPORTANT", "alert_score": 60, "category": "DRAFT_ANALYSIS",
+            "sport": "lol", "title": "LNG Esports vs Ninjas in Pyjamas.CN",
+            "summary": "当前概率暂不可用，比赛仍保持监控。",
+            "reasons": ["蓝方：K'Sante、Bel'Veth、Syndra、Lucian、Milio",
+                        "红方：Jayce、Trundle、Diana、Xayah、Rakan"],
+        })
+        self.assertIn("BP 完成分析", text)
+        self.assertIn("LNG Esports 对 Ninjas in Pyjamas", text)
+        self.assertNotIn(".CN", text)
 
 
 if __name__ == "__main__":

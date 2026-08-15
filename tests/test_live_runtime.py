@@ -76,5 +76,32 @@ class LiveRuntimeTests(unittest.TestCase):
         self.assertEqual(recovered[0].category, "MONITORING_RECOVERY")
 
 
+    def test_draft_analysis_not_emitted_for_finished_match(self):
+        now = datetime.now(timezone.utc)
+        with tempfile.TemporaryDirectory() as temp:
+            supervisor = LiveSupervisor(root=Path(temp))
+            live = LiveState("draft", "g1", "lol", now, "FINISHED", "T1", "Gen.G",
+                             features={"champions_a": ["A", "B", "C", "D", "E"],
+                                       "champions_b": ["F", "G", "H", "I", "J"]}, finished=True)
+            alerts = supervisor._lifecycle_alerts([live], {match_key(live): None})
+        self.assertFalse(any(alert.category == "DRAFT_ANALYSIS" for alert in alerts))
+
+    def test_draft_analysis_emitted_once_per_new_draft(self):
+        now = datetime.now(timezone.utc)
+        with tempfile.TemporaryDirectory() as temp:
+            supervisor = LiveSupervisor(root=Path(temp))
+            live = LiveState("draft", "g1", "lol", now, "LIVE", "T1", "Gen.G",
+                             features={"champions_a": ["A", "B", "C", "D", "E"],
+                                       "champions_b": ["F", "G", "H", "I", "J"]})
+            first = supervisor._lifecycle_alerts([live], {match_key(live): None})
+            self.assertTrue(any(alert.category == "DRAFT_ANALYSIS" for alert in first))
+            previous = {"state_json": json.dumps({"features": {
+                "champions_a": ["A", "B", "C", "D", "E"],
+                "champions_b": ["F", "G", "H", "I", "J"],
+            }})}
+            again = supervisor._lifecycle_alerts([live], {match_key(live): previous})
+        self.assertFalse(any(alert.category == "DRAFT_ANALYSIS" for alert in again))
+
+
 if __name__ == "__main__":
     unittest.main()

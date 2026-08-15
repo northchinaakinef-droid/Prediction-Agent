@@ -125,9 +125,15 @@ class LiveSupervisor:
                                             f"最终比分：{state.score_a:.0f} - {state.score_b:.0f}", [summary], state.observed_at,
                                             key + ":MATCH_FINISHED"))
             elif state.sport == "lol":
+                if state.finished or str(state.status).casefold() in {"finished", "completed", "post", "final"}:
+                    continue
                 champions_a = tuple(value for value in state.features.get("champions_a", []) if value)
                 champions_b = tuple(value for value in state.features.get("champions_b", []) if value)
                 if len(champions_a) == len(champions_b) == 5:
+                    before_champions_a = tuple(value for value in (before_state.get("features") or {}).get("champions_a", []) if value)
+                    before_champions_b = tuple(value for value in (before_state.get("features") or {}).get("champions_b", []) if value)
+                    if before_champions_a == champions_a and before_champions_b == champions_b:
+                        continue
                     draft_id = ":".join(sorted(champions_a + champions_b))
                     alerts.append(LiveAlert(
                         key, "lol", "IMPORTANT", 60, "DRAFT_ANALYSIS", state.team_a + " vs " + state.team_b,
@@ -138,6 +144,8 @@ class LiveSupervisor:
 
     def _watcher_alerts(self, report: dict, states: list, now: datetime) -> list[LiveAlert]:
         grace = timedelta(minutes=max(5, int(os.getenv("WATCHER_START_GRACE_MINUTES", "10"))))
+        window = timedelta(minutes=max(30, int(os.getenv("WATCHER_MISSING_WINDOW_MINUTES", "240"))))
+        zone = ZoneInfo(os.getenv("REPORT_TIMEZONE", "Asia/Singapore"))
         active = {match_key(state) for state in states if state.status == "LIVE"}
         finished = {match_key(state) for state in states if state.status == "FINISHED" or state.finished}
         expected: dict[str, tuple[str, dict]] = {}
@@ -147,7 +155,7 @@ class LiveSupervisor:
                     start = datetime.fromisoformat(str(match["start_time"]).replace("Z", "+00:00"))
                 except (KeyError, ValueError):
                     continue
-                if start + grace <= now <= start + timedelta(hours=8) and str(match.get("event_status", "")).casefold() not in {
+                if start + grace <= now <= start + window and str(match.get("event_status", "")).casefold() not in {
                     "finished", "completed", "post", "final"
                 }:
                     teams = sorted((normalized_name(canonical_team(sport, str(match.get("team_a") or ""))),
@@ -157,10 +165,14 @@ class LiveSupervisor:
         alerts = []
         for key in sorted(missing - self.missing_watchers):
             sport, match = expected[key]
+            match_start = datetime.fromisoformat(str(match["start_time"]).replace("Z", "+00:00"))
+            start_display = match_start.astimezone(zone).strftime("%H:%M")
+            summary = (f"比赛预计 {start_display} 已开始，但当前没有活跃监控器；"
+                       "若比赛已结束可忽略本提醒。")
             alerts.append(LiveAlert(
                 key, sport, "EMERGENCY", 90, "WATCHER_MISSING",
                 f"{match.get('team_a')} vs {match.get('team_b')}",
-                "比赛预计已经开始，但没有活跃监控器。", ["已标记为数据不完整，正在持续重试。"], now,
+                summary, ["已标记为数据不完整，正在持续重试。"], now,
                 f"{key}:WATCHER_MISSING:{match.get('start_time')}",
             ))
         for key in sorted(self.missing_watchers - missing):

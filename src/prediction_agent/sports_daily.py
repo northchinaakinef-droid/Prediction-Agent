@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import unicodedata
 from dataclasses import asdict
@@ -18,7 +19,7 @@ from .providers.live_data import (
     PandaScoreProvider, SportSrcNbaProvider, TheSportsDbNbaProvider,
 )
 from .risk import recommend
-from .entities import canonical_team
+from .entities import canonical_team, normalized_name
 from .schedule import (
     LolScheduleDiscovery, SourceResult, append_schedule_audit, build_schedule_audit, make_match,
 )
@@ -47,6 +48,40 @@ def _text(value: object) -> str:
                    if unicodedata.category(character) not in {"Cc", "Cf"}).strip()
 
 
+def _probability_sanity(model_probability: float, market_probability: float | None) -> list[str]:
+    """Surface implausible probabilities instead of silently publishing them."""
+    problems: list[str] = []
+    if not math.isfinite(model_probability) or not 0 <= model_probability <= 1:
+        problems.append("模型概率超出 [0, 1] 有效范围，已标记为可疑。")
+    elif model_probability > 0.98 or model_probability < 0.02:
+        problems.append("模型概率处于极端区间（>98% 或 <2%），建议人工复核后再使用。")
+    if market_probability is not None and math.isfinite(market_probability):
+        divergence = abs(model_probability - market_probability)
+        if divergence > 0.35:
+            problems.append(f"模型与市场价格分歧过大（{divergence:.1%}），可能为赛程-市场映射异常或数据错误。")
+    return problems
+
+
+def _find_schedule_match(schedule_matches: list[dict] | None, sport: str,
+                         team_a: str, team_b: str, scheduled: datetime | None) -> dict | None:
+    if not schedule_matches or scheduled is None:
+        return None
+    wanted = {normalized_name(team_a), normalized_name(team_b)}
+    for row in schedule_matches:
+        if row.get("sport") != sport:
+            continue
+        actual = {normalized_name(row.get("team_a")), normalized_name(row.get("team_b"))}
+        if actual != wanted:
+            continue
+        try:
+            start = datetime.fromisoformat(str(row.get("start_time")))
+        except (TypeError, ValueError):
+            continue
+        if abs((scheduled - start).total_seconds()) <= 90 * 60:
+            return row
+    return None
+
+
 def _start(market: dict) -> datetime | None:
     value = market.get("gameStartTime")
     if not value:
@@ -62,7 +97,8 @@ def _main_market(event: dict) -> dict | None:
 
 
 def analyze_sport(sport: str, model: EloModel | NbaModel, evaluation: dict, events: list[dict], *,
-                  now: datetime, bankroll: float, estimated_cost: float = .01) -> list[dict]:
+                  now: datetime, bankroll: float, estimated_cost: float = .01,
+                  schedule_matches: list[dict] | None = None) -> list[dict]:
     rows = []
     for event in events:
         market = _main_market(event)
@@ -112,6 +148,12 @@ def analyze_sport(sport: str, model: EloModel | NbaModel, evaluation: dict, even
             reasons.append("未通过历史可成交赔率 ROI 验收，禁止真钱建议")
         if started:
             reasons.append("比赛已开始或开赛时间无法核验，禁止赛前下注")
+        market_probability = prices[side]
+        model_probability = model_ps[side]
+        sanity = _probability_sanity(model_probability, market_probability)
+        if sanity:
+            reasons.extend(sanity)
+        schedule_match = _find_schedule_match(schedule_matches, sport, outcomes[0], outcomes[1], scheduled)
         row = asdict(rec)
         row["generated_at"] = rec.generated_at.isoformat()
         hours_to_start, decision_window = _timing(scheduled, now)
@@ -126,6 +168,9 @@ def analyze_sport(sport: str, model: EloModel | NbaModel, evaluation: dict, even
             "market_comparison_valid": not started,
             "hours_to_start": hours_to_start,
             "decision_window": decision_window,
+            "probability_plausible": not bool(sanity),
+            "schedule_matched": bool(schedule_match and schedule_match.get("market_mapping_status") == "MATCHED"),
+            "market_mapping_status": schedule_match.get("market_mapping_status") if schedule_match else "NOT_IN_SCHEDULE",
             "reasons": reasons + list(rec.reasons),
         })
         if started:
@@ -166,7 +211,8 @@ def _market_rows(events: list[dict], now: datetime) -> list[tuple[dict, dict, da
 def _research_row(sport: str, event: dict, market: dict, scheduled: datetime | None,
                   outcomes: list[str], prices: list[float], probabilities: list[float], *,
                   probability_ok: bool, money_ok: bool, now: datetime, bankroll: float,
-                  reasons: list[str], estimated_cost: float = .01) -> dict:
+                  reasons: list[str], estimated_cost: float = .01,
+                  schedule_matches: list[dict] | None = None) -> dict:
     side = max(range(2), key=lambda index: probabilities[index] - prices[index])
     bid, best_ask = market.get("bestBid"), market.get("bestAsk")
     ask = float(best_ask) if side == 0 and best_ask is not None else (
@@ -185,6 +231,12 @@ def _research_row(sport: str, event: dict, market: dict, scheduled: datetime | N
         reasons.append("尚未通过带历史可成交赔率的样本外 ROI 验收，禁止真钱下注建议。")
     if started:
         reasons.append("比赛已开始或开赛时间无法核验，禁止赛前下注。")
+    market_probability = prices[side]
+    model_probability = probabilities[side]
+    sanity = _probability_sanity(model_probability, market_probability)
+    if sanity:
+        reasons.extend(sanity)
+    schedule_match = _find_schedule_match(schedule_matches, sport, outcomes[0], outcomes[1], scheduled)
     row = asdict(rec)
     row["generated_at"] = rec.generated_at.isoformat()
     assert scheduled is not None
@@ -200,6 +252,9 @@ def _research_row(sport: str, event: dict, market: dict, scheduled: datetime | N
         "market_comparison_valid": not started,
         "hours_to_start": hours_to_start,
         "decision_window": decision_window,
+        "probability_plausible": not bool(sanity),
+        "schedule_matched": bool(schedule_match and schedule_match.get("market_mapping_status") == "MATCHED"),
+        "market_mapping_status": schedule_match.get("market_mapping_status") if schedule_match else "NOT_IN_SCHEDULE",
         "reasons": reasons + list(rec.reasons),
     })
     if started:
@@ -209,7 +264,8 @@ def _research_row(sport: str, event: dict, market: dict, scheduled: datetime | N
 
 
 def analyze_cs2(model: Cs2Model, evaluation: dict, events: list[dict], *,
-                now: datetime, bankroll: float) -> list[dict]:
+                now: datetime, bankroll: float,
+                schedule_matches: list[dict] | None = None) -> list[dict]:
     rows = []
     for event, market, scheduled, outcomes, prices in _market_rows(events, now):
         a, b = canonical_team("cs2", outcomes[0]), canonical_team("cs2", outcomes[1])
@@ -227,12 +283,14 @@ def analyze_cs2(model: Cs2Model, evaluation: dict, events: list[dict], *,
         rows.append(_research_row("cs2", event, market, scheduled, outcomes, prices,
                                   [probability, 1-probability], probability_ok=probability_ok,
                                   money_ok=bool(evaluation.get("approved_for_real_money")),
-                                  now=now, bankroll=bankroll, reasons=reasons))
+                                  now=now, bankroll=bankroll, reasons=reasons,
+                                  schedule_matches=schedule_matches))
     return rows
 
 
 def analyze_lol_meta(model: LolMetaModel, evaluation: dict, events: list[dict], *,
-                     now: datetime, bankroll: float) -> list[dict]:
+                     now: datetime, bankroll: float,
+                     schedule_matches: list[dict] | None = None) -> list[dict]:
     rows = []
     for event, market, scheduled, outcomes, prices in _market_rows(events, now):
         a, b = canonical_team("lol", outcomes[0]), canonical_team("lol", outcomes[1])
@@ -258,7 +316,8 @@ def analyze_lol_meta(model: LolMetaModel, evaluation: dict, events: list[dict], 
         rows.append(_research_row("lol", event, market, scheduled, outcomes, prices,
                                   [probability, 1-probability], probability_ok=probability_ok,
                                   money_ok=bool(evaluation.get("approved_for_real_money")),
-                                  now=now, bankroll=bankroll, reasons=reasons))
+                                  now=now, bankroll=bankroll, reasons=reasons,
+                                  schedule_matches=schedule_matches))
     return rows
 
 
@@ -321,6 +380,7 @@ def run_all(model_dir: str | Path, output: str | Path, *, now: datetime | None =
         market_search=market_search,
     )
     audits = {"lol": lol_audit, "nba": nba_audit, "cs2": cs2_audit}
+    audit_matches = {sport: audit["matches"] for sport, audit in audits.items()}
     for sport, audit in audits.items():
         append_schedule_audit(
             audit, os.getenv("SCHEDULE_AUDIT_LOG",
@@ -342,11 +402,14 @@ def run_all(model_dir: str | Path, output: str | Path, *, now: datetime | None =
             model, evaluation = load_model(path)
         events = market_events[sport]
         if sport == "cs2":
-            sport_rows = analyze_cs2(model, evaluation, events, now=now, bankroll=bankroll)
+            sport_rows = analyze_cs2(model, evaluation, events, now=now, bankroll=bankroll,
+                                     schedule_matches=audit_matches[sport])
         elif sport == "lol":
-            sport_rows = analyze_lol_meta(model, evaluation, events, now=now, bankroll=bankroll)
+            sport_rows = analyze_lol_meta(model, evaluation, events, now=now, bankroll=bankroll,
+                                          schedule_matches=audit_matches[sport])
         else:
-            sport_rows = analyze_sport(sport, model, evaluation, events, now=now, bankroll=bankroll)
+            sport_rows = analyze_sport(sport, model, evaluation, events, now=now, bankroll=bankroll,
+                                       schedule_matches=audit_matches[sport])
         recommendations.extend(sport_rows)
         statuses[sport] = {
             "ready": True, "artifact_ready": True,
