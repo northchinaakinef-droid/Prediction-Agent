@@ -2,7 +2,9 @@ import tempfile
 from pathlib import Path
 import unittest
 
-from prediction_agent.paper_store import current_drawdown, record_report, settle_pending, summary
+from prediction_agent.paper_store import (current_drawdown, paper_review_detail,
+                                          record_post_match_review, record_report,
+                                          settle_pending, summary)
 
 
 class FakeClient:
@@ -60,6 +62,25 @@ class PaperStoreTests(unittest.TestCase):
             result = settle_pending(path, FailingClient())
             self.assertEqual(result["errors"], 1)
             self.assertEqual(result["settled"], 0)
+
+    def test_post_match_review_detail_persists_series_analysis_and_game_samples(self):
+        review = {
+            "sport": "lol", "event_id": "series-1", "event": "T1 vs Gen.G",
+            "generated_at": "2026-01-01T00:00:00+00:00", "actual_winner": "T1",
+            "predicted_winner": "T1", "prediction_correct": True,
+            "model_probability": .55, "bp_probability": .55,
+            "decisive_factors": ["经济领先"],
+            "game_samples": [{"game_index": 1, "blue_post_draft_win": .55,
+                              "red_post_draft_win": .45, "winner_side": "a"}],
+            "series_analysis": "T1 vs Gen.G BO1 系列复盘。\n第1局 BP 后模型胜率：蓝方 55.0%，红方 45.0%。",
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "paper.db"
+            record_post_match_review(path, review)
+            details = paper_review_detail(path)
+        self.assertEqual(len(details), 1)
+        self.assertEqual(details[0]["series_analysis"], review["series_analysis"])
+        self.assertEqual(details[0]["game_samples"], review["game_samples"])
 
     def test_current_drawdown_uses_settled_bet_pnl(self):
         report = {"generated_at": "2026-01-01T00:00:00+00:00", "report_date": "2026-01-01",

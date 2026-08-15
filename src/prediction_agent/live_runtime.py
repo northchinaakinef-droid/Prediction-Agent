@@ -218,7 +218,8 @@ class LiveSupervisor:
         return factors
 
     def _result_review_alerts(self, states: list, now: datetime,
-                               analyst_notes: dict[str, list] | None = None) -> list[LiveAlert]:
+                               analyst_notes: dict[str, list] | None = None,
+                               game_details: dict[str, list[dict]] | None = None) -> list[LiveAlert]:
         analyst_notes = analyst_notes or {}
         alerts = []
         for state in states:
@@ -261,6 +262,8 @@ class LiveSupervisor:
                      if state.team_a.casefold() in str(note.title).casefold()
                      or state.team_b.casefold() in str(note.title).casefold()]
             decisive_factors = self._decisive_factors(state)
+            game_samples = state.features.get("bp_game_samples", []) if state.sport == "lol" else []
+            series_analysis = self._build_series_review_analysis(state, game_samples, analyst_notes)
             key = match_key(state)
             alerts.append(LiveAlert(
                 key, state.sport, "IMPORTANT", 70, "POSTMATCH_REVIEW",
@@ -284,6 +287,8 @@ class LiveSupervisor:
                     "analyst_notes": [{"title": note.title, "link": note.link, "source": note.source}
                                       for note in notes[:3]],
                     "decisive_factors": decisive_factors,
+                    "game_samples": game_samples,
+                    "series_analysis": series_analysis,
                 },
             ))
         for alert in alerts:
@@ -304,6 +309,8 @@ class LiveSupervisor:
                         "model_probability": details.get("bp_probability"),
                         "bp_probability": details.get("bp_probability"),
                         "decisive_factors": details.get("decisive_factors", []),
+                        "game_samples": details.get("game_samples", []),
+                        "series_analysis": details.get("series_analysis", ""),
                     },
                 )
         return alerts
@@ -512,7 +519,67 @@ class LiveSupervisor:
                 canonical_team(state.sport, state.team_a)) else 1 - probability
         return priors
 
-    def _add_lol_draft_probabilities(self, states: list) -> None:
+    def _lol_game_details(self) -> dict[str, list[dict]]:
+        """Return per-game draft/result rows for each LoL series.
+
+        Leaguepedia publishes one row per small game (picks + winner), which is
+        the data needed to evaluate every individual BP instead of only the
+        latest sampled game.
+        """
+        details: dict[str, list[dict]] = {}
+        for state in self._attempt("leaguepedia_bp_all", lambda: LeaguepediaDraftProvider().live_all()):
+            key = match_key(state)
+            details.setdefault(key, []).append({
+                "game_id": state.source_id,
+                "game_time": str(state.features.get("game_time") or state.observed_at.isoformat()),
+                "champions_a": list(state.features.get("champions_a", [])),
+                "champions_b": list(state.features.get("champions_b", [])),
+                "winner_side": state.features.get("winner_side"),
+                "finished": bool(state.finished),
+            })
+        for games in details.values():
+            games.sort(key=lambda row: row.get("game_time") or "")
+            for index, row in enumerate(games, 1):
+                row["game_index"] = index
+        return details
+
+    def _compute_lol_bp_samples(self, model, patch: str, state, game_details: dict[str, list[dict]]) -> list[dict]:
+        team_a, team_b = canonical_team("lol", state.team_a), canonical_team("lol", state.team_b)
+        players_a = tuple(model.latest_team_rosters.get(team_a, ()))
+        players_b = tuple(model.latest_team_rosters.get(team_b, ()))
+        if len(players_a) != 5 or len(players_b) != 5:
+            return []
+        samples = []
+        games = sorted((game_details or {}).get(match_key(state), []),
+                       key=lambda row: row.get("game_time") or "")
+        for offset, game in enumerate(games, 1):
+            champions_a = tuple(value for value in game.get("champions_a", []) if value)
+            champions_b = tuple(value for value in game.get("champions_b", []) if value)
+            if len(champions_a) != 5 or len(champions_b) != 5:
+                continue
+            game_obj = LolDraftGame(
+                f"live-{game.get('game_id') or state.source_id}", state.observed_at, patch, "live",
+                team_a, team_b, players_a, players_b, champions_a, champions_b, 0,
+            )
+            blue_win = model.predict_post_draft(game_obj)
+            samples.append({
+                "game_index": int(game.get("game_index") or offset),
+                "game_id": str(game.get("game_id") or ""),
+                "game_time": str(game.get("game_time") or ""),
+                "blue_team": state.team_a,
+                "red_team": state.team_b,
+                "blue_champions": list(champions_a),
+                "red_champions": list(champions_b),
+                "blue_players": list(players_a),
+                "red_players": list(players_b),
+                "blue_post_draft_win": round(blue_win, 4),
+                "red_post_draft_win": round(1 - blue_win, 4),
+                "winner_side": game.get("winner_side"),
+            })
+        return samples
+
+    def _add_lol_draft_probabilities(self, states: list,
+                                     game_details: dict[str, list[dict]] | None = None) -> None:
         path = self.root / "artifacts" / "lol_meta_model.json"
         if not path.exists():
             return
@@ -526,20 +593,82 @@ class LiveSupervisor:
             team_a, team_b = canonical_team("lol", state.team_a), canonical_team("lol", state.team_b)
             players_a = tuple(model.latest_team_rosters.get(team_a, ()))
             players_b = tuple(model.latest_team_rosters.get(team_b, ()))
-            if len(players_a) != 5 or len(players_b) != 5 or len(champions_a) != 5 or len(champions_b) != 5:
-                continue
-            game = LolDraftGame(
-                f"live-{state.source_id}", state.observed_at, patch, "live", team_a, team_b,
-                players_a, players_b, champions_a, champions_b, 0,
-            )
-            state.features["post_draft_probability"] = model.predict_post_draft(game)
-            state.features["draft_readout"] = model.draft_readout(game)
+            if len(players_a) == 5 and len(players_b) == 5 and len(champions_a) == 5 and len(champions_b) == 5:
+                game = LolDraftGame(
+                    f"live-{state.source_id}", state.observed_at, patch, "live", team_a, team_b,
+                    players_a, players_b, champions_a, champions_b, 0,
+                )
+                state.features["post_draft_probability"] = model.predict_post_draft(game)
+                state.features["draft_readout"] = model.draft_readout(game)
+            state.features["bp_game_samples"] = self._compute_lol_bp_samples(model, patch, state, game_details)
+
+    def _build_series_review_analysis(self, state, game_samples: list[dict], analyst_notes: dict[str, list]) -> str:
+        """Return a structured, multi-paragraph post-match review.
+
+        The full text is persisted as a training/evaluation sample; the push
+        message keeps only the short version in ``format_live_alert``.
+        """
+        lines: list[str] = []
+        if state.sport == "lol":
+            games = game_samples or []
+            lines.append(f"{state.team_a} vs {state.team_b} BO{max(1, len(games))} 系列复盘。")
+            actual_side = self._winner_side(state)
+            prematch_side = self._prematch_side(state)
+            if prematch_side is not None:
+                prematch_team = state.team_a if prematch_side == "a" else state.team_b
+                result = "正确" if prematch_side == actual_side else "错误"
+                lines.append(f"赛前方向：{prematch_team}；系列结果判断{result}。")
+            else:
+                lines.append("赛前方向：未生成有效概率，跳过赛前维度。")
+            if games:
+                for game in games:
+                    index = int(game.get("game_index") or 0)
+                    blue = game.get("blue_post_draft_win")
+                    red = game.get("red_post_draft_win")
+                    winner_side = game.get("winner_side")
+                    winner_team = (state.team_a if winner_side == "a"
+                                   else state.team_b if winner_side == "b" else None)
+                    lines.append(
+                        f"第{index}局 BP：蓝方 {state.team_a} "
+                        f"({'、'.join(game.get('blue_champions') or [])})；红方 {state.team_b} "
+                        f"({'、'.join(game.get('red_champions') or [])})。"
+                    )
+                    if blue is not None and red is not None:
+                        lines.append(
+                            f"第{index}局 BP 后模型胜率：蓝方 {float(blue):.1%}，红方 {float(red):.1%}。"
+                        )
+                    if winner_team:
+                        predicted_side = "a" if float(blue or 0) >= float(red or 0) else "b"
+                        correct = winner_side == predicted_side
+                        lines.append(
+                            f"第{index}局实际胜者：{winner_team}；BP 后模型判断{'正确' if correct else '错误'}。"
+                        )
+            factors = self._decisive_factors(state)
+            if factors:
+                lines.append("全场关键数据：" + "；".join(factors) + "。")
+            lines.append("该复盘文本作为赛后样本沉淀，用于后续模型迭代，不参与当前推送数值计算。")
+        else:
+            lines.append(f"{state.team_a} vs {state.team_b} 赛后复盘。")
+            actual_side = self._winner_side(state)
+            prematch_side = self._prematch_side(state)
+            actual_team = state.team_a if actual_side == "a" else state.team_b
+            lines.append(f"实际胜者：{actual_team}。")
+            if prematch_side is not None:
+                prematch_team = state.team_a if prematch_side == "a" else state.team_b
+                result = "正确" if prematch_side == actual_side else "错误"
+                lines.append(f"赛前预测：{prematch_team}；判断{result}。")
+            factors = self._decisive_factors(state)
+            if factors:
+                lines.append("全场关键数据：" + "；".join(factors) + "。")
+            lines.append("该复盘文本作为赛后样本沉淀，用于后续模型迭代。")
+        return "\n".join(lines)
 
     def scan_once(self) -> dict:
         now = datetime.now(timezone.utc)
         report = self._report()
         states = self.collect_states()
-        self._add_lol_draft_probabilities(states)
+        lol_game_details = self._lol_game_details()
+        self._add_lol_draft_probabilities(states, lol_game_details)
         news = self._attempt("news_rss", lambda: RssNewsProvider().recent())
         for state in states:
             matched = [item for item in news if state.team_a.casefold() in item.title.casefold() or
@@ -571,7 +700,7 @@ class LiveSupervisor:
                 self.on_alert(alert)
         lifecycle = (self._prematch_alerts(report, now, analyst_notes) +
                      self._lifecycle_alerts(states, previous) +
-                     self._result_review_alerts(states, now, analyst_notes) +
+                     self._result_review_alerts(states, now, analyst_notes, lol_game_details) +
                      self._watcher_alerts(report, states, now))
         emitted_lifecycle = [alert for alert in lifecycle if self._emit_once(alert)]
         alerts.extend(emitted_lifecycle)

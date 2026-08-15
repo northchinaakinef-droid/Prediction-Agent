@@ -323,10 +323,18 @@ class LeaguepediaDraftProvider:
         return [item.strip() for item in str(value or "").split(",") if item.strip()]
 
     def live(self) -> list[LiveState]:
+        rows = self.live_all()
+        latest = {}
+        for row in rows:
+            key = tuple(sorted((row.team_a.casefold(), row.team_b.casefold())))
+            latest.setdefault(key, row)
+        return list(latest.values())
+
+    def live_all(self) -> list[LiveState]:
         now = datetime.now(timezone.utc)
         since = (now - timedelta(hours=10)).strftime("%Y-%m-%d %H:%M:%S")
         payload = _get_json(self.base, params={
-            "action": "cargoquery", "format": "json", "limit": 100,
+            "action": "cargoquery", "format": "json", "limit": 200,
             "tables": "ScoreboardGames=SG",
             "fields": "SG.Team1,SG.Team2,SG.DateTime_UTC,SG.Team1Picks,SG.Team2Picks,SG.GameId,SG.Tournament,SG.Winner",
             "where": f"SG.DateTime_UTC >= '{since}'", "order_by": "SG.DateTime_UTC DESC",
@@ -344,8 +352,9 @@ class LeaguepediaDraftProvider:
             if len(champions_a) != 5 or len(champions_b) != 5:
                 continue
             finished = str(item.get("Winner") or "") in {"1", "2"}
+            game_time = str(item.get("DateTime_UTC") or "")
             features = {"champions_a": champions_a, "champions_b": champions_b,
-                        "draft_source_delayed": True}
+                        "draft_source_delayed": True, "game_time": game_time}
             if finished:
                 features["winner_side"] = "a" if str(item.get("Winner")) == "1" else "b"
             rows.append(LiveState(
@@ -353,11 +362,7 @@ class LeaguepediaDraftProvider:
                 "lol", now, "FINISHED" if finished else "LIVE", str(item.get("Team1") or ""),
                 str(item.get("Team2") or ""), features=features, finished=finished,
             ))
-        latest = {}
-        for row in rows:
-            key = tuple(sorted((row.team_a.casefold(), row.team_b.casefold())))
-            latest.setdefault(key, row)
-        return list(latest.values())
+        return rows
 
 
 class GridOpenAccessProvider:

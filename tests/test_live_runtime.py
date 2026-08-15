@@ -110,6 +110,59 @@ class LiveRuntimeTests(unittest.TestCase):
         self.assertEqual(first_alert.dedupe_key, second_alert.dedupe_key)
         self.assertTrue(first_alert.dedupe_key.endswith(":POSTMATCH_REVIEW"))
 
+    def test_lol_bp_samples_are_recorded_per_small_game(self):
+        now = datetime.now(timezone.utc)
+        with tempfile.TemporaryDirectory() as temp:
+            supervisor = LiveSupervisor(root=Path(temp))
+            state = LiveState("leaguepedia", "series-1", "lol", now, "FINISHED", "T1", "Gen.G",
+                              features={"winner_side": "a"}, finished=True)
+            game_details = {
+                match_key(state): [
+                    {"game_id": "g2", "game_time": "2026-01-01T01:00:00", "winner_side": "b",
+                     "champions_a": ["A", "B", "C", "D", "E"], "champions_b": ["F", "G", "H", "I", "J"]},
+                    {"game_id": "g1", "game_time": "2026-01-01T00:00:00", "winner_side": "a",
+                     "champions_a": ["A", "B", "C", "D", "E"], "champions_b": ["F", "G", "H", "I", "J"]},
+                ]
+            }
+            class FakeMeta:
+                latest_team_rosters = {
+                    "T1": ("p1", "p2", "p3", "p4", "p5"),
+                    "Gen.G": ("p6", "p7", "p8", "p9", "p10"),
+                }
+                def predict_post_draft(self, game):
+                    return .61
+            samples = supervisor._compute_lol_bp_samples(FakeMeta(), "25.10", state, game_details)
+        self.assertEqual(len(samples), 2)
+        self.assertEqual(samples[0]["game_id"], "g1")
+        self.assertEqual(samples[0]["game_index"], 1)
+        self.assertAlmostEqual(samples[0]["blue_post_draft_win"], .61)
+        self.assertAlmostEqual(samples[0]["red_post_draft_win"], .39)
+
+    def test_series_review_analysis_is_multi_game_and_structured(self):
+        now = datetime.now(timezone.utc)
+        with tempfile.TemporaryDirectory() as temp:
+            supervisor = LiveSupervisor(root=Path(temp))
+            state = LiveState("leaguepedia", "series-1", "lol", now, "FINISHED", "T1", "Gen.G",
+                              features={"winner_side": "a"}, finished=True)
+            games = [
+                {"game_index": 1, "blue_champions": ["A", "B", "C", "D", "E"],
+                 "red_champions": ["F", "G", "H", "I", "J"],
+                 "blue_post_draft_win": .55, "red_post_draft_win": .45, "winner_side": "a"},
+                {"game_index": 2, "blue_champions": ["K", "L", "M", "N", "O"],
+                 "red_champions": ["P", "Q", "R", "S", "T"],
+                 "blue_post_draft_win": .48, "red_post_draft_win": .52, "winner_side": "b"},
+                {"game_index": 3, "blue_champions": ["U", "V", "W", "X", "Y"],
+                 "red_champions": ["Z", "AA", "BB", "CC", "DD"],
+                 "blue_post_draft_win": .60, "red_post_draft_win": .40, "winner_side": "a"},
+            ]
+            text = supervisor._build_series_review_analysis(state, games, {})
+        self.assertIn("BO3", text)
+        self.assertIn("第1局 BP", text)
+        self.assertIn("第2局 BP", text)
+        self.assertIn("第3局 BP", text)
+        self.assertIn("BP 后模型胜率", text)
+        self.assertGreater(len(text.splitlines()), 6)
+
     def test_legacy_postmatch_review_keys_are_collapsed_to_stable_key(self):
         now = datetime.now(timezone.utc)
         with tempfile.TemporaryDirectory() as temp:
