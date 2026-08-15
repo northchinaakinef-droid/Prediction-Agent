@@ -291,6 +291,20 @@ def paper_review(path: str | Path, since: str = "1970-01-01") -> list[dict[str, 
     ]
 
 
+def paper_review_detail(path: str | Path, since: str = "1970-01-01") -> list[dict[str, Any]]:
+    """Return full post-match review JSON for downstream model iteration."""
+    target = Path(path)
+    if not target.exists():
+        return []
+    with closing(sqlite3.connect(target)) as connection:
+        connection.executescript(SCHEMA)
+        rows = connection.execute(
+            "SELECT review_json FROM post_match_reviews WHERE generated_at >= ? ORDER BY generated_at",
+            (since,),
+        ).fetchall()
+    return [json.loads(row[0]) for row in rows]
+
+
 def _list(value: Any) -> list[Any]:
     return json.loads(value) if isinstance(value, str) else list(value or [])
 
