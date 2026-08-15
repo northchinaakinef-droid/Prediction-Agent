@@ -161,6 +161,20 @@ class CoreTests(unittest.TestCase):
         self.assertIn("配合与滚雪球", text)
         self.assertIn("风险点", text)
         self.assertIn("研究监控信号", text)
+        self.assertIn("亚托克斯", text)
+        self.assertIn("卑尔维斯", text)
+        self.assertIn("辛德拉", text)
+        self.assertIn("卢锡安", text)
+        self.assertIn("米利欧", text)
+        self.assertIn("杰斯", text)
+        self.assertIn("特朗德尔", text)
+        self.assertIn("黛安娜", text)
+        self.assertIn("霞", text)
+        self.assertIn("洛", text)
+        self.assertNotIn("Aatrox", text)
+        self.assertNotIn("K'Sante", text)
+        self.assertNotIn("Bel'Veth", text)
+        self.assertNotIn("Syndra", text)
 
 
 if __name__ == "__main__":
