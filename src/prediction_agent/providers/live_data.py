@@ -336,7 +336,13 @@ class LeaguepediaDraftProvider:
         payload = _get_json(self.base, params={
             "action": "cargoquery", "format": "json", "limit": 200,
             "tables": "ScoreboardGames=SG",
-            "fields": "SG.Team1,SG.Team2,SG.DateTime_UTC,SG.Team1Picks,SG.Team2Picks,SG.GameId,SG.Tournament,SG.Winner",
+            "fields": (
+                "SG.Team1,SG.Team2,SG.DateTime_UTC,SG.Team1Picks,SG.Team2Picks,SG.GameId,"
+                "SG.Tournament,SG.Winner,SG.Team1Dragons,SG.Team2Dragons,SG.Team1Barons,"
+                "SG.Team2Barons,SG.Team1Towers,SG.Team2Towers,SG.Team1RiftHeralds,"
+                "SG.Team2RiftHeralds,SG.Team1Inhibitors,SG.Team2Inhibitors,SG.Gamelength_Number,"
+                "SG.Patch,SG.N_GameInMatch,SG.Team1Players,SG.Team2Players,SG.Team1Bans,SG.Team2Bans"
+            ),
             "where": f"SG.DateTime_UTC >= '{since}'", "order_by": "SG.DateTime_UTC DESC",
         }, headers={"User-Agent": "PredictionAgent/0.2"})
         targets = tuple(value.strip().casefold() for value in os.getenv(
@@ -353,8 +359,21 @@ class LeaguepediaDraftProvider:
                 continue
             finished = str(item.get("Winner") or "") in {"1", "2"}
             game_time = str(item.get("DateTime_UTC") or "")
-            features = {"champions_a": champions_a, "champions_b": champions_b,
-                        "draft_source_delayed": True, "game_time": game_time}
+            features = {
+                "champions_a": champions_a, "champions_b": champions_b,
+                "draft_source_delayed": True, "game_time": game_time,
+                "dragons_a": item.get("Team1Dragons"), "dragons_b": item.get("Team2Dragons"),
+                "barons_a": item.get("Team1Barons"), "barons_b": item.get("Team2Barons"),
+                "towers_a": item.get("Team1Towers"), "towers_b": item.get("Team2Towers"),
+                "rift_heralds_a": item.get("Team1RiftHeralds"), "rift_heralds_b": item.get("Team2RiftHeralds"),
+                "inhibitors_a": item.get("Team1Inhibitors"), "inhibitors_b": item.get("Team2Inhibitors"),
+                "game_length_seconds": item.get("Gamelength_Number"), "patch": item.get("Patch"),
+                "game_number": item.get("N_GameInMatch"),
+                "players_a": self._picks(item.get("Team1Players")),
+                "players_b": self._picks(item.get("Team2Players")),
+                "bans_a": self._picks(item.get("Team1Bans")),
+                "bans_b": self._picks(item.get("Team2Bans")),
+            }
             if finished:
                 features["winner_side"] = "a" if str(item.get("Winner")) == "1" else "b"
             rows.append(LiveState(
