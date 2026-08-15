@@ -97,5 +97,17 @@ class ScheduleTests(unittest.TestCase):
         self.assertEqual(match.market_mapping_status, "MATCHED")
 
 
+    def test_lol_aliases_merge_abbreviation_and_full_name(self):
+        start = datetime(2026, 8, 14, 8, tzinfo=timezone.utc)
+        a = make_match(source="a", league="LPL", team_a="NIP", team_b="LNG",
+                       start_time=start, event_name="LPL")
+        b = make_match(source="b", league="LPL", team_a="Ninjas in Pyjamas", team_b="LNG Esports",
+                       start_time=start, event_name="LPL")
+        expected, disagreements = reconcile_sources([SourceResult("a", True, [a]), SourceResult("b", True, [b])])
+        self.assertEqual(len(expected), 1)
+        self.assertFalse(disagreements)
+        self.assertEqual({expected[0].team_a, expected[0].team_b}, {"Ninjas in Pyjamas", "LNG Esports"})
+
+
 if __name__ == "__main__":
     unittest.main()
