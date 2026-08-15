@@ -368,6 +368,34 @@ def format_daily_report(report: dict[str, Any], report_date: date | None = None)
     return "\n".join(lines).strip()
 
 
+def format_paper_betting_summary(summary: dict[str, Any], report_date: str,
+                                     bankroll: float) -> str:
+    """Format one unified daily paper-betting summary for Feishu text delivery."""
+    def roi_text(value: Any) -> str:
+        return f"{float(value):.1%}" if isinstance(value, (int, float)) else "暂无"
+
+    by_sport = summary.get("by_sport") or {}
+    lines = [
+        f"📊 虚拟投注日报｜{report_date}",
+        "",
+        f"研究本金：{float(bankroll):.2f} USDC",
+        f"今日预测：{int(summary.get('predictions', 0))} 场｜"
+        f"虚拟下注：{int(summary.get('bet_candidates', 0))} 场｜"
+        f"已结算：{int(summary.get('settled_predictions', 0))} 场",
+        f"今日模拟盈亏：{float(summary.get('paper_profit', 0)):+.2f} USDC｜"
+        f"ROI：{roi_text(summary.get('paper_roi'))}",
+    ]
+    for sport, stat in by_sport.items():
+        lines.append(
+            f"{_sport_name(sport)}：下注 {int(stat.get('bet_candidates', 0))} 场｜"
+            f"结算 {int(stat.get('settled_predictions', 0))} 场｜"
+            f"盈亏 {float(stat.get('paper_profit', 0)):+.2f} USDC｜"
+            f"ROI {roi_text(stat.get('paper_roi'))}"
+        )
+    lines.extend(["", "仅用于虚拟投注复盘与模型迭代，不涉及真实资金。"])
+    return "\n".join(lines).strip()
+
+
 def format_daily_post(report: dict[str, Any], report_date: date | None = None) -> dict[str, Any]:
     """Build Feishu's localized rich-text post document from the readable text report."""
     lines = format_daily_report(report, report_date).splitlines()

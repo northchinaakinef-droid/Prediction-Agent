@@ -10,10 +10,16 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from prediction_agent.delivery import FeishuAppClient, FeishuWebhookClient, format_daily_post, format_live_alert
+from prediction_agent.delivery import (
+    FeishuAppClient, FeishuWebhookClient, format_daily_post, format_live_alert,
+    format_paper_betting_summary,
+)
 from prediction_agent.live_runtime import LiveSupervisor
 from prediction_agent.sports_daily import run_all
-from prediction_agent.paper_store import record_report, settle_pending, summary as paper_summary
+from prediction_agent.paper_store import (
+    mark_paper_summary_sent, paper_daily_summary, paper_summary_sent,
+    record_report, settle_pending, summary as paper_summary,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -95,6 +101,33 @@ def _next_run(now: datetime) -> datetime:
     return target.astimezone(timezone.utc)
 
 
+def _next_paper_summary_run(now: datetime) -> datetime:
+    zone = ZoneInfo(os.getenv("REPORT_TIMEZONE", "Asia/Singapore"))
+    hour, minute = (int(x) for x in os.getenv("PAPER_SUMMARY_TIME", "23:45").split(":", 1))
+    local = now.astimezone(zone)
+    target = local.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if target <= local:
+        target += timedelta(days=1)
+    return target.astimezone(timezone.utc)
+
+
+def _run_paper_summary() -> None:
+    """Send one daily paper-betting summary per report_date, then mark it sent."""
+    zone = ZoneInfo(os.getenv("REPORT_TIMEZONE", "Asia/Singapore"))
+    report_date = datetime.now(zone).date().isoformat()
+    paper_path = Path(os.getenv("PAPER_DB_PATH", str(ROOT / "data" / "daily" / "paper.db")))
+    try:
+        settle_pending(paper_path)
+    except Exception:
+        pass
+    if paper_summary_sent(paper_path, report_date):
+        return
+    summary = paper_daily_summary(paper_path, report_date)
+    bankroll = float(os.getenv("BANKROLL_USDC", os.getenv("BANKROLL", "10000")))
+    _send_message(format_paper_betting_summary(summary, report_date, bankroll))
+    mark_paper_summary_sent(paper_path, report_date, datetime.now(timezone.utc).isoformat())
+
+
 def scheduler() -> None:
     if os.getenv("RUN_ON_START", "false").casefold() == "true":
         try:
@@ -103,11 +136,20 @@ def scheduler() -> None:
             pass
     while True:
         now = datetime.now(timezone.utc)
-        wait = max(1.0, (_next_run(now) - now).total_seconds())
+        next_daily = _next_run(now)
+        next_summary = _next_paper_summary_run(now)
+        wait = max(1.0, min((next_daily - now).total_seconds(),
+                            (next_summary - now).total_seconds()))
         time.sleep(min(wait, 60))
-        if datetime.now(timezone.utc) >= _next_run(now) - timedelta(seconds=1):
+        current = datetime.now(timezone.utc)
+        if current >= next_daily - timedelta(seconds=1):
             try:
                 run_once()
+            except Exception:
+                pass
+        if current >= next_summary - timedelta(seconds=1):
+            try:
+                _run_paper_summary()
             except Exception:
                 pass
 
