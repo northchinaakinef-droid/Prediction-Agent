@@ -64,6 +64,7 @@ class LiveAlert:
     reasons: list[str]
     observed_at: datetime
     dedupe_key: str
+    details: dict[str, Any] | None = None
 
     def as_dict(self) -> dict:
         row = asdict(self)

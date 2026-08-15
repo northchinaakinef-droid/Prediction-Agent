@@ -135,10 +135,20 @@ class LiveSupervisor:
                     if before_champions_a == champions_a and before_champions_b == champions_b:
                         continue
                     draft_id = ":".join(sorted(champions_a + champions_b))
+                    post = state.features.get("post_draft_probability")
+                    readout = state.features.get("draft_readout")
+                    draft_summary = (f"BP 后模型胜率：蓝方 {post:.1%}｜红方 {1-post:.1%}"
+                                     if post is not None else summary)
+                    details = {
+                        "blue_champions": list(champions_a),
+                        "red_champions": list(champions_b),
+                        "post_draft_probability": post,
+                        "readout": readout,
+                    }
                     alerts.append(LiveAlert(
                         key, "lol", "IMPORTANT", 60, "DRAFT_ANALYSIS", state.team_a + " vs " + state.team_b,
-                        summary, ["蓝方：" + "、".join(champions_a), "红方：" + "、".join(champions_b)],
-                        state.observed_at, f"{key}:DRAFT:{draft_id}",
+                        draft_summary, ["蓝方：" + "、".join(champions_a), "红方：" + "、".join(champions_b)],
+                        state.observed_at, f"{key}:DRAFT:{draft_id}", details,
                     ))
         return alerts
 
@@ -308,6 +318,7 @@ class LiveSupervisor:
                 players_a, players_b, champions_a, champions_b, 0,
             )
             state.features["post_draft_probability"] = model.predict_post_draft(game)
+            state.features["draft_readout"] = model.draft_readout(game)
 
     def scan_once(self) -> dict:
         now = datetime.now(timezone.utc)

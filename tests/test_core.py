@@ -4,8 +4,8 @@ import unittest
 from prediction_agent.anomaly import detect_market_anomalies
 from prediction_agent.backtest import BacktestRow, run_backtest
 from prediction_agent.delivery import (
-    FeishuWebhookClient, _display_team, _event_name, format_daily_post, format_daily_report,
-    format_live_alert, webhook_signature,
+    FeishuWebhookClient, _display_team, _event_name, _format_draft_alert, format_daily_post,
+    format_daily_report, format_live_alert, webhook_signature,
 )
 from prediction_agent.models import MarketSnapshot
 from prediction_agent.risk import normalize_two_way, recommend
@@ -132,6 +132,35 @@ class CoreTests(unittest.TestCase):
         self.assertIn("BP 完成分析", text)
         self.assertIn("LNG Esports 对 Ninjas in Pyjamas", text)
         self.assertNotIn(".CN", text)
+
+
+    def test_draft_alert_includes_strength_and_risk_sections(self):
+        text = _format_draft_alert({
+            "severity": "IMPORTANT", "alert_score": 60, "sport": "lol",
+            "title": "LNG Esports vs Ninjas in Pyjamas",
+            "details": {
+                "blue_champions": ["Aatrox", "Bel'Veth", "Syndra", "Lucian", "Milio"],
+                "red_champions": ["Jayce", "Trundle", "Diana", "Xayah", "Rakan"],
+                "post_draft_probability": 0.58,
+                "readout": {
+                    "blue_team": "LNG Esports", "red_team": "Ninjas in Pyjamas",
+                    "team_edge": 45.0,
+                    "lanes": [
+                        {"role": "top", "blue_champion": "Aatrox", "red_champion": "Jayce", "edge": 20},
+                        {"role": "jng", "blue_champion": "Bel'Veth", "red_champion": "Trundle", "edge": 35},
+                        {"role": "mid", "blue_champion": "Syndra", "red_champion": "Diana", "edge": 55},
+                        {"role": "bot", "blue_champion": "Lucian", "red_champion": "Xayah", "edge": -30},
+                        {"role": "sup", "blue_champion": "Milio", "red_champion": "Rakan", "edge": -5},
+                    ],
+                },
+            },
+        })
+        self.assertIn("BP 后模型胜率", text)
+        self.assertIn("双方阵容", text)
+        self.assertIn("阵容优劣", text)
+        self.assertIn("配合与滚雪球", text)
+        self.assertIn("风险点", text)
+        self.assertIn("研究监控信号", text)
 
 
 if __name__ == "__main__":

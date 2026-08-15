@@ -289,8 +289,102 @@ def format_daily_post(report: dict[str, Any], report_date: date | None = None) -
     return {"zh_cn": {"title": title, "content": content}}
 
 
+ROLE_CN = {"top": "上路", "jng": "打野", "mid": "中路", "bot": "下路", "sup": "辅助"}
+
+
+def _draft_edge_lines(lanes: list[dict]) -> tuple[list[str], list[str]]:
+    strengths: list[str] = []
+    weaknesses: list[str] = []
+    for lane in lanes:
+        edge = float(lane.get("edge") or 0)
+        if abs(edge) < 15:
+            continue
+        role = ROLE_CN.get(str(lane.get("role")), str(lane.get("role")))
+        blue_champion = lane.get("blue_champion") or "-"
+        red_champion = lane.get("red_champion") or "-"
+        if edge > 0:
+            strengths.append(f"• {role}：蓝方 {blue_champion} 对 红方 {red_champion}｜蓝方净优势 +{edge:.0f}")
+        else:
+            weaknesses.append(f"• {role}：蓝方 {blue_champion} 对 红方 {red_champion}｜红方净优势 +{-edge:.0f}")
+    return strengths, weaknesses
+
+
+def _format_draft_alert(row: dict[str, Any]) -> str:
+    icon = "🔴" if row.get("severity") == "EMERGENCY" else "🟠" if row.get("severity") == "IMPORTANT" else "🟡"
+    severity = {"EMERGENCY": "紧急", "IMPORTANT": "重要", "OBSERVE": "关注", "NORMAL": "关注"}.get(
+        str(row.get("severity")), str(row.get("severity") or "关注"))
+    details = row.get("details") or {}
+    readout = details.get("readout") or {}
+    blue_champions = details.get("blue_champions") or []
+    red_champions = details.get("red_champions") or []
+    post = details.get("post_draft_probability")
+    lanes = readout.get("lanes") or []
+    team_edge = float(readout.get("team_edge") or 0)
+
+    lines = [
+        f"{icon}【BP 完成分析】",
+        f"{_sport_name(row.get('sport'))}｜{_event_name(row.get('title'))}",
+        f"重要度：{float(row.get('alert_score', 0)):.0f}/100｜级别：{severity}",
+    ]
+    if post is not None:
+        lines.append(f"BP 后模型胜率：蓝方 {post:.1%}｜红方 {1-post:.1%}")
+    lines.extend([
+        "",
+        "【双方阵容】",
+        f"• 蓝方：{'、'.join(str(value) for value in blue_champions) or '-'}",
+        f"• 红方：{'、'.join(str(value) for value in red_champions) or '-'}",
+        "",
+        "【阵容优劣】",
+    ])
+    strengths, weaknesses = _draft_edge_lines(lanes)
+    if team_edge > 20:
+        strengths.append(f"• 队伍底蕴：蓝方整体略强 +{team_edge:.0f}")
+    elif team_edge < -20:
+        weaknesses.append(f"• 队伍底蕴：红方整体略强 +{-team_edge:.0f}")
+    if strengths:
+        lines.extend(strengths)
+    if weaknesses:
+        lines.extend(weaknesses)
+    if not strengths and not weaknesses:
+        lines.append("• 各线对位接近，没有明显的单线优势或劣势。")
+
+    lines.extend(["", "【为什么】"])
+    if strengths:
+        lines.append("• 优势来自英雄熟练度、版本强度与队伍整体功底的叠加。")
+    if weaknesses:
+        lines.append("• 劣势主要集中在对位强度偏低，或被版本/熟练度克制的线路。")
+
+    strong_blue = [lane for lane in lanes if float(lane.get("edge") or 0) >= 25]
+    strong_red = [lane for lane in lanes if float(lane.get("edge") or 0) <= -25]
+    lines.extend(["", "【配合与滚雪球】"])
+    if strong_blue:
+        roles = "、".join(ROLE_CN.get(str(lane.get("role")), str(lane.get("role"))) for lane in strong_blue)
+        lines.append(f"• 蓝方应围绕{roles}建立节奏，打野优先保优势路，控先锋/小龙后滚雪球；红方需避战换资源拖发育。")
+    elif strong_red:
+        roles = "、".join(ROLE_CN.get(str(lane.get("role")), str(lane.get("role"))) for lane in strong_red)
+        lines.append(f"• 红方应围绕{roles}建立节奏，打野优先保优势路，控先锋/小龙后滚雪球；蓝方需避战换资源拖发育。")
+    else:
+        lines.append("• 双方对位接近，优先围绕队伍底蕴更强的半区做资源交换，避免无把握的正面团战。")
+
+    lines.extend(["", "【风险点】"])
+    blue_weakest = min(lanes, key=lambda lane: float(lane.get("edge") or 0), default=None)
+    red_weakest = max(lanes, key=lambda lane: float(lane.get("edge") or 0), default=None)
+    if blue_weakest is not None and float(blue_weakest.get("edge") or 0) < -15:
+        role = ROLE_CN.get(str(blue_weakest.get("role")), str(blue_weakest.get("role")))
+        lines.append(f"• 蓝方{role}若被针对崩线，容易被滚雪球，最终全盘皆输。")
+    if red_weakest is not None and float(red_weakest.get("edge") or 0) > 15:
+        role = ROLE_CN.get(str(red_weakest.get("role")), str(red_weakest.get("role")))
+        lines.append(f"• 红方{role}若被针对崩线，容易被滚雪球，最终全盘皆输。")
+    if not (blue_weakest and red_weakest):
+        lines.append("• 当前阵容解读样本有限，暂不给出极端风险判断。")
+    lines.extend(["", "研究监控信号，不构成下注建议。"])
+    return "\n".join(lines).strip()
+
+
 def format_live_alert(alert: LiveAlert | dict[str, Any]) -> str:
     row = alert.as_dict() if isinstance(alert, LiveAlert) else alert
+    if str(row.get("category")) == "DRAFT_ANALYSIS" and row.get("details"):
+        return _format_draft_alert(row)
     icon = "🔴" if row.get("severity") == "EMERGENCY" else "🟠" if row.get("severity") == "IMPORTANT" else "🟡"
     severity = {"EMERGENCY": "紧急", "IMPORTANT": "重要", "OBSERVE": "关注", "NORMAL": "关注"}.get(
         str(row.get("severity")), str(row.get("severity") or "关注")
