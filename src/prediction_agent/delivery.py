@@ -581,17 +581,28 @@ def _format_prematch_alert(row: dict[str, Any]) -> str:
         f"重要度：{float(row.get('alert_score', 0)):.0f}/100｜级别：{severity}",
     ]
     outcome = details.get("outcome")
+    team_a = _display_team(details.get("team_a"))
+    team_b = _display_team(details.get("team_b"))
     blue = details.get("blue_win_probability")
     red = details.get("red_win_probability")
     if blue is not None and red is not None:
         lines.append(f"赛前预测方向：{_display_team(outcome)}")
-        lines.append(f"模型胜率：蓝方 {float(blue):.1%}｜红方 {float(red):.1%}")
+        if team_a and team_b:
+            lines.append(f"模型胜率：{team_a} {float(blue):.1%}｜{team_b} {float(red):.1%}")
+        else:
+            lines.append(f"模型胜率：{float(blue):.1%}｜{float(red):.1%}")
     blue_market = details.get("blue_market_probability")
     red_market = details.get("red_market_probability")
     if blue_market is not None and red_market is not None:
-        lines.append(f"市场胜率：蓝方 {float(blue_market):.1%}｜红方 {float(red_market):.1%}")
+        if team_a and team_b:
+            lines.append(f"市场胜率：{team_a} {float(blue_market):.1%}｜{team_b} {float(red_market):.1%}")
+        else:
+            lines.append(f"市场胜率：{float(blue_market):.1%}｜{float(red_market):.1%}")
     else:
         lines.append("市场胜率：暂无对应报价")
+    analyst_count = int(details.get("analyst_count") or 0)
+    if analyst_count:
+        lines.append(f"分析师参考：已纳入 {analyst_count} 篇相关公开资料。")
     reasons = details.get("reasons") or row.get("reasons") or []
     lines.extend(["", "预测依据："])
     if reasons:
@@ -615,6 +626,10 @@ def _format_postmatch_alert(row: dict[str, Any]) -> str:
     actual_winner = details.get("actual_winner")
     if actual_winner:
         lines.append(f"实际胜者：{_display_team(actual_winner)}")
+    score_a = details.get("score_a")
+    score_b = details.get("score_b")
+    if score_a is not None and score_b is not None:
+        lines.append(f"最终比分：{float(score_a):.0f} - {float(score_b):.0f}")
     actual_side = details.get("actual_side")
     prematch_side = details.get("prematch_side")
     prematch_team = details.get("prematch_team")
@@ -628,6 +643,9 @@ def _format_postmatch_alert(row: dict[str, Any]) -> str:
         bp_side = details.get("bp_side")
         result = "正确" if bp_side == actual_side else "错误"
         lines.append(f"BP后预测：蓝方 {float(bp_probability):.1%}｜红方 {1-float(bp_probability):.1%}｜判断：{result}")
+    analyst_count = int(details.get("analyst_count") or 0)
+    if analyst_count:
+        lines.append(f"分析师参考：已纳入 {analyst_count} 篇相关公开资料。")
     lines.extend(["", "复盘说明："])
     for reason in row.get("reasons", [])[:4]:
         lines.append(f"• {_zh_live_text(reason)}")
