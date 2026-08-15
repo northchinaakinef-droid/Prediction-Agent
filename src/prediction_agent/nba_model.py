@@ -175,6 +175,8 @@ def evaluate_nba(games: Iterable[LolGame]) -> tuple[NbaModel, dict]:
 
 
 def save_nba(model: NbaModel, evaluation: dict, path: str | Path) -> None:
+    if "approved_for_real_money" not in evaluation or not evaluation.get("validation") or not evaluation.get("retrospective_test"):
+        raise ValueError("refusing to write NBA model without a complete evaluation record")
     Path(path).write_text(json.dumps({"model": asdict(model), "evaluation": evaluation},
                                     ensure_ascii=False, indent=2), encoding="utf-8")
 

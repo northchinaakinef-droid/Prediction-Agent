@@ -16,7 +16,7 @@ from .lol_model import evaluate_periods, evaluate_years, fit_elo, load_oracle_el
 from .lol_model import load_canonical_games
 from .sports_daily import run_all
 from .providers.polymarket import PolymarketClient
-from .paper_store import record_report, settle_pending, summary as paper_summary
+from .paper_store import paper_review, record_report, settle_pending, summary as paper_summary
 from .risk import recommend
 
 
@@ -92,6 +92,9 @@ def main() -> None:
     paper.add_argument("--paper-db", default="data/daily/paper.db")
     settle = sub.add_parser("paper-settle", help="settle prior ledger events from Polymarket")
     settle.add_argument("--paper-db", default="data/daily/paper.db")
+    review = sub.add_parser("paper-review", help="list settled post-match reviews sorted by biggest miss")
+    review.add_argument("--paper-db", default="data/daily/paper.db")
+    review.add_argument("--since", default="1970-01-01")
     args = parser.parse_args()
     if args.command == "polymarket":
         rows = PolymarketClient().search_sports(args.query, limit=args.limit)
@@ -178,6 +181,8 @@ def main() -> None:
         print(json.dumps(paper_summary(args.paper_db), ensure_ascii=False, indent=2))
     elif args.command == "paper-settle":
         print(json.dumps(settle_pending(args.paper_db), ensure_ascii=False, indent=2))
+    elif args.command == "paper-review":
+        print(json.dumps(paper_review(args.paper_db, args.since), ensure_ascii=False, indent=2))
     else:
         report_data = json.loads(Path(args.report).read_text(encoding="utf-8"))
         message = format_daily_report(report_data)

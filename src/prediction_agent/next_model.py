@@ -60,6 +60,88 @@ class TimedFeature:
             raise ValueError("feature requires a source and finite value")
 
 
+INJURY_IMPACT = {
+    "AVAILABLE": 0.0,
+    "PROBABLE": 0.15,
+    "QUESTIONABLE": 0.35,
+    "DOUBTFUL": 0.55,
+    "OUT": 1.0,
+}
+
+
+@dataclass(frozen=True)
+class InjuryRecord:
+    player: str
+    status: str
+    published_at: datetime
+    source: str
+    impact_weight: float = 1.0
+
+    def __post_init__(self) -> None:
+        if self.published_at.tzinfo is None:
+            raise ValueError("injury published_at must be timezone-aware")
+        if self.status.upper() not in INJURY_IMPACT:
+            raise ValueError(f"unknown injury status: {self.status}")
+        if not self.source.strip() or not math.isfinite(self.impact_weight):
+            raise ValueError("injury requires a source and finite impact weight")
+
+
+@dataclass(frozen=True)
+class AnalystPick:
+    analyst: str
+    probability_a: float
+    published_at: datetime
+    source: str
+
+    def __post_init__(self) -> None:
+        if self.published_at.tzinfo is None:
+            raise ValueError("analyst published_at must be timezone-aware")
+        if not 0 <= self.probability_a <= 1:
+            raise ValueError("analyst probability must be in [0, 1]")
+        if not self.source.strip():
+            raise ValueError("analyst pick requires a source")
+
+
+def injury_impact_diff(team_a_records: Iterable[InjuryRecord],
+                       team_b_records: Iterable[InjuryRecord],
+                       decision_at: datetime) -> float:
+    """Build the timestamp-validated NBA injury/lineup feature.
+
+    Positive values mean team A is carrying more injury/availability impact than
+    team B.  Any record published after ``decision_at`` is a look-ahead leak and
+    is rejected here, matching ``ModelRow.__post_init__``.
+    """
+    def team_impact(records):
+        total = 0.0
+        for record in records:
+            if record.published_at > decision_at:
+                raise ValueError(f"look-ahead injury record for {record.player}")
+            total += INJURY_IMPACT[record.status.upper()] * record.impact_weight
+        return total
+
+    return team_impact(team_a_records) - team_impact(team_b_records)
+
+
+def analyst_consensus_diff(records: Iterable[AnalystPick],
+                           decision_at: datetime,
+                           market_probability: float) -> float:
+    """Build a timestamp-validated analyst-consensus feature.
+
+    Returns the difference between the mean analyst probability and the market
+    probability.  This is the quantitative layer only; it never directly changes
+    stake/action and must be routed through ``ModelRow``/walk-forward like any
+    other feature.
+    """
+    probabilities = []
+    for record in records:
+        if record.published_at > decision_at:
+            raise ValueError(f"look-ahead analyst pick from {record.analyst}")
+        probabilities.append(record.probability_a)
+    if not probabilities:
+        return 0.0
+    return mean(probabilities) - float(market_probability)
+
+
 @dataclass(frozen=True)
 class ModelRow:
     event_id: str

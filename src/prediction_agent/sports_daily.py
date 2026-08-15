@@ -22,6 +22,7 @@ from .providers.live_data import (
 from .risk import RiskBudgetLedger, RiskConfig, recommend
 from .entities import canonical_team, normalized_name
 from .costs import estimate_cost_rate
+from .narrative import build_pre_match_summary
 from .schedule import (
     LolScheduleDiscovery, SourceResult, append_schedule_audit, build_schedule_audit, make_match,
 )
@@ -226,6 +227,7 @@ def analyze_sport(sport: str, model: EloModel | NbaModel, evaluation: dict, even
         if started:
             row.update({"decision_probability": None, "raw_edge": None, "edge": None,
                         "expected_value": None, "execution_price": None})
+        row["narrative_summary"] = build_pre_match_summary(row)
         rows.append(row)
     return rows
 
@@ -328,6 +330,7 @@ def _research_row(sport: str, event: dict, market: dict, scheduled: datetime | N
     if started:
         row.update({"decision_probability": None, "raw_edge": None, "edge": None,
                     "expected_value": None, "execution_price": None})
+    row["narrative_summary"] = build_pre_match_summary(row)
     return row
 
 
@@ -399,6 +402,22 @@ def analyze_lol_meta(model: LolMetaModel, evaluation: dict, events: list[dict], 
                                   now=now, bankroll=bankroll, reasons=reasons,
                                   schedule_matches=schedule_matches, risk_config=risk_config, ledger=ledger, group_key=group_key))
     return rows
+
+
+FLAG_DISAGREEMENT_DEFAULT = 0.10
+
+
+def flag_rows(rows: list[dict], flag_threshold: float = FLAG_DISAGREEMENT_DEFAULT) -> list[dict]:
+    """Tag rows needing human review and return them in a separate bucket."""
+    flagged = []
+    for row in rows:
+        raw_edge = row.get("raw_edge")
+        disagreement = raw_edge is not None and abs(float(raw_edge)) >= flag_threshold
+        data_problem = row.get("market_mapping_status") in {"DATA_UNAVAILABLE", "DATA_MISMATCH"}
+        row["flagged"] = bool(disagreement or data_problem)
+        if row["flagged"]:
+            flagged.append(row)
+    return flagged
 
 
 def run_all(model_dir: str | Path, output: str | Path, *, now: datetime | None = None,
@@ -517,6 +536,28 @@ def run_all(model_dir: str | Path, output: str | Path, *, now: datetime | None =
             "today_probability_eligible": sum(row["probability_eligible"] for row in sport_rows),
             "today_bet_candidates": sum(row["action"] == "BET" for row in sport_rows),
         }
+    flag_threshold = float(os.getenv("FLAG_DISAGREEMENT_THRESHOLD", str(FLAG_DISAGREEMENT_DEFAULT)))
+    staleness = {}
+    for sport, status in statuses.items():
+        if status.get("ready") and status.get("trained_through"):
+            try:
+                trained = datetime.fromisoformat(str(status["trained_through"])).date()
+                staleness[sport] = (now.date() - trained).days
+            except ValueError:
+                pass
+    retrain_interval = int(os.getenv("MODEL_RETRAIN_INTERVAL_DAYS", "42"))
+    max_staleness = max(staleness.values(), default=0)
+    model_staleness = {
+        "days_by_sport": staleness,
+        "max_days": max_staleness,
+        "interval_days": retrain_interval,
+        "warning": max_staleness > retrain_interval,
+    }
+    flagged = flag_rows(recommendations, flag_threshold)
+    if ledger.breaker_reason:
+        for row in recommendations:
+            row["flagged"] = True
+        flagged = list(recommendations)
     risk_notes = ["NBA、LoL、CS2 分别训练和验收；CBA 已暂停。历史可成交赔率 ROI 验收前均保持 NO_BET。"]
     if ledger.breaker_reason:
         risk_notes.append(ledger.breaker_reason)
@@ -525,7 +566,10 @@ def run_all(model_dir: str | Path, output: str | Path, *, now: datetime | None =
         "bankroll_usdc": bankroll, "recommendations": recommendations, "sport_status": statuses,
         "schedule_coverage": audits,
         "data_incomplete": any(audit["data_incomplete"] for audit in audits.values()),
+        "flagged": flagged,
+        "flag_threshold": flag_threshold,
         "risk_notes": risk_notes,
+        "model_staleness": model_staleness,
         "risk_status": {
             "bankroll_usdc": bankroll,
             "max_bet_fraction": risk_config.max_bet_fraction,

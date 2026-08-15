@@ -74,6 +74,7 @@ def run_once(*, notify: bool = True) -> None:
             report["paper_summary"] = paper_summary(paper_path)
             STATE["paper_summary"] = report["paper_summary"]
             STATE["risk_status"] = report.get("risk_status")
+            STATE["model_staleness"] = report.get("model_staleness")
             STATE["last_scan"] = datetime.now(timezone.utc).isoformat()
             if notify:
                 _send(report)

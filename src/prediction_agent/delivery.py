@@ -282,11 +282,28 @@ def format_daily_report(report: dict[str, Any], report_date: date | None = None)
         if suspicious:
             lines.append(f"• 概率可疑 {suspicious} 场：模型输出处于异常区间，建议复核。")
 
+    flagged_rows = report.get("flagged") or [row for row in rows if row.get("flagged")]
+    if flagged_rows:
+        lines.extend(["", "【需人工复核】"])
+        for index, row in enumerate(flagged_rows, 1):
+            team_a, team_b = _event_team_pair(row)
+            outcome = row.get("outcome")
+            model = row.get("model_probability")
+            market = row.get("market_probability")
+            reasons = _key_reasons(row)
+            lines.extend([
+                "",
+                f"🚩 {index}. {team_a} 对 {team_b}",
+                f"预测方向：{_display_team(outcome)}",
+                f"模型胜率：{_two_sided_probability(model, outcome, team_a, team_b)}",
+                f"市场胜率：{_two_sided_probability(market, outcome, team_a, team_b)}",
+            ])
+            lines.extend(f"• {reason}" for reason in reasons)
     if not rows:
         lines.extend(["", "暂无达到策略与风控要求的机会。"])
 
     for sport in (*sport_order, None):
-        sport_rows = [row for row in rows if row.get("sport") == sport] if sport is not None else other_rows
+        sport_rows = [row for row in rows if row.get("sport") == sport and not row.get("flagged")] if sport is not None else [row for row in other_rows if not row.get("flagged")]
         if not sport_rows:
             continue
         section_name = _sport_name(sport) if sport else "其他"

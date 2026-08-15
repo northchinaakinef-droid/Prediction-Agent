@@ -241,7 +241,9 @@ def _prequential(model: EloModel, games: list[LolGame]) -> tuple[dict, EloModel]
 
 
 def save_model(model: EloModel, path: str | Path, evaluation: dict | None = None) -> None:
-    payload = {"model": model.as_dict(), "evaluation": evaluation or {}}
+    if evaluation is None or "approved_for_real_money" not in evaluation or not evaluation.get("validation"):
+        raise ValueError("refusing to write model without a complete evaluation record")
+    payload = {"model": model.as_dict(), "evaluation": evaluation}
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     Path(path).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 

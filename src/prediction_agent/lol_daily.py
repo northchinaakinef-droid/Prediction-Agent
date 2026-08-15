@@ -12,6 +12,7 @@ from .lol_model import EloModel, load_model, series_probability
 from .providers.polymarket import PolymarketClient
 from .risk import RiskBudgetLedger, RiskConfig, recommend
 from .costs import estimate_cost_rate
+from .narrative import build_pre_match_summary
 
 
 TITLE = re.compile(r"^LoL: (.+?) vs (.+?) \(BO(\d)\)")
@@ -112,6 +113,7 @@ def build_lol_report(model: EloModel, evaluation: dict, events: list[dict], *,
             "edge": rec.decision_probability - ask - cost,
             "reasons": reasons + list(rec.reasons),
         })
+        row["narrative_summary"] = build_pre_match_summary(row)
         rows.append(row)
     return {
         "report_date": report_day.isoformat(), "generated_at": now.isoformat(),
