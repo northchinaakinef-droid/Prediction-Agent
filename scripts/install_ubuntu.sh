@@ -15,6 +15,7 @@ sudo systemctl enable --now docker
 
 mkdir -p reports data/daily
 sudo chown -R 10001:10001 reports data
+sudo chown 10001:10001 .env
 chmod 600 .env
 
 sudo docker compose build
