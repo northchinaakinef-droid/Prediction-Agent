@@ -123,14 +123,23 @@ def paper_scheduler() -> None:
 
 
 ALLOWED_LIVE_ALERT_CATEGORIES = {"PREMATCH_ANALYSIS", "DRAFT_ANALYSIS", "POSTMATCH_REVIEW"}
+_SENT_LIVE_ALERT_KEYS: set[str] = set()
 
 
 def _send_valuable_alert(alert) -> None:
     category = getattr(alert, "category", None)
     if category is None and isinstance(alert, dict):
         category = alert.get("category")
-    if category in ALLOWED_LIVE_ALERT_CATEGORIES:
-        _send_message(format_live_alert(alert))
+    if category not in ALLOWED_LIVE_ALERT_CATEGORIES:
+        return
+    dedupe_key = getattr(alert, "dedupe_key", None)
+    if dedupe_key is None and isinstance(alert, dict):
+        dedupe_key = alert.get("dedupe_key")
+    if dedupe_key and dedupe_key in _SENT_LIVE_ALERT_KEYS:
+        return
+    _send_message(format_live_alert(alert))
+    if dedupe_key:
+        _SENT_LIVE_ALERT_KEYS.add(dedupe_key)
 
 
 def live_scheduler() -> None:
