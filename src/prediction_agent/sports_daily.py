@@ -50,6 +50,25 @@ def _is_major_lol_event(title: object) -> bool:
     return any(keyword in lowered for keyword in LOL_MAJOR_EVENT_KEYWORDS)
 
 
+CS2_MAJOR_EVENT_KEYWORDS = (
+    "major", "iem", "intel extreme masters", "esl pro league",
+    "blast premier", "blast open", "blast showdown", "blast.tv",
+    "pgl", "esports world cup", "ewc",
+)
+
+CS2_MINOR_EVENT_KEYWORDS = (
+    "cct", "esea", "esl challenger", "rising", "regional", "national",
+    "academy", "open qualifier", "closed qualifier", "qualifier",
+)
+
+
+def _is_major_cs2_event(title: object) -> bool:
+    lowered = str(title or "").casefold()
+    if any(keyword in lowered for keyword in CS2_MINOR_EVENT_KEYWORDS):
+        return False
+    return any(keyword in lowered for keyword in CS2_MAJOR_EVENT_KEYWORDS)
+
+
 def _field(value):
     return json.loads(value) if isinstance(value, str) else list(value or [])
 
@@ -279,6 +298,9 @@ def analyze_cs2(model: Cs2Model, evaluation: dict, events: list[dict], *,
                 schedule_matches: list[dict] | None = None) -> list[dict]:
     rows = []
     for event, market, scheduled, outcomes, prices in _market_rows(events, now):
+        schedule_match = _find_schedule_match(schedule_matches, "cs2", outcomes[0], outcomes[1], scheduled)
+        if schedule_match is None and not _is_major_cs2_event(event.get("title")):
+            continue
         a, b = canonical_team("cs2", outcomes[0]), canonical_team("cs2", outcomes[1])
         roster_a = tuple(model.latest_team_rosters.get(a, ()))
         roster_b = tuple(model.latest_team_rosters.get(b, ()))

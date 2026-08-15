@@ -1,10 +1,18 @@
 from datetime import datetime, timedelta, timezone
 import unittest
 
-from prediction_agent.sports_daily import _find_schedule_match, _is_major_lol_event, _probability_sanity, _research_row
+from prediction_agent.sports_daily import _find_schedule_match, _is_major_cs2_event, _is_major_lol_event, _probability_sanity, _research_row
 
 
 class SportsDailyTests(unittest.TestCase):
+    def test_cs2_major_event_filter(self):
+        self.assertTrue(_is_major_cs2_event("IEM Katowice 2026"))
+        self.assertTrue(_is_major_cs2_event("BLAST Premier World Final"))
+        self.assertTrue(_is_major_cs2_event("PGL Major Copenhagen"))
+        self.assertTrue(_is_major_cs2_event("Esports World Cup 2026"))
+        self.assertFalse(_is_major_cs2_event("CCT Online Finals"))
+        self.assertFalse(_is_major_cs2_event("ESEA Advanced"))
+
     def test_lol_major_event_filter(self):
         self.assertTrue(_is_major_lol_event("LPL Group Ascend"))
         self.assertTrue(_is_major_lol_event("LCK 2026"))
