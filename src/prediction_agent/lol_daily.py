@@ -10,7 +10,8 @@ from zoneinfo import ZoneInfo
 
 from .lol_model import EloModel, load_model, series_probability
 from .providers.polymarket import PolymarketClient
-from .risk import recommend
+from .risk import RiskBudgetLedger, RiskConfig, recommend
+from .costs import estimate_cost_rate
 
 
 TITLE = re.compile(r"^LoL: (.+?) vs (.+?) \(BO(\d)\)")
@@ -32,10 +33,16 @@ def _scheduled_at(event: dict, year: int) -> datetime | None:
 
 def build_lol_report(model: EloModel, evaluation: dict, events: list[dict], *,
                      now: datetime | None = None, bankroll: float = 1000.0,
-                     estimated_cost: float = 0.01) -> dict:
+                     estimated_cost: float | None = None,
+                     risk_config: RiskConfig | None = None,
+                     ledger: RiskBudgetLedger | None = None,
+                     group_key: str | None = None) -> dict:
     now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     report_zone = ZoneInfo(os.getenv("REPORT_TIMEZONE", "Asia/Singapore"))
     report_day = now.astimezone(report_zone).date()
+    risk_config = risk_config or RiskConfig.from_env()
+    if ledger is None:
+        ledger = RiskBudgetLedger(risk_config, bankroll)
     rows = []
     probability_approved = bool(evaluation.get("approved_for_probability_use"))
     money_approved = bool(evaluation.get("approved_for_real_money"))
@@ -67,13 +74,25 @@ def build_lol_report(model: EloModel, evaluation: dict, events: list[dict], *,
         liquidity = float(main_market.get("liquidity") or 0)
         started = scheduled is None or scheduled <= now
         known_teams = model.games.get(team_a, 0) >= 10 and model.games.get(team_b, 0) >= 10
+        assert scheduled is not None
+        event_key = str(event.get("id"))
+        group = group_key or f"lol:{scheduled.date().isoformat()}"
+        cost = estimate_cost_rate(ask) if estimated_cost is None else estimated_cost
+        cap = ledger.cap_for(event_key, group)
+        risk_reasons = ledger.exhausted_reasons(event_key, group)
         rec = recommend(
-            event_id=str(event.get("id")), outcome=str(outcomes[best_index]),
+            event_id=event_key, outcome=str(outcomes[best_index]),
             model_probability=probabilities[best_index], decimal_odds=1 / ask,
             bankroll=bankroll, confidence=0.75 if probability_approved and known_teams else 0.25,
-            spread=spread, available_size=liquidity, estimated_cost=estimated_cost,
+            spread=spread, available_size=liquidity, estimated_cost=cost,
             trading_enabled=money_approved and not started,
+            kelly_scale=risk_config.kelly_scale, max_bet_fraction=cap,
+            min_edge=risk_config.min_edge, min_confidence=risk_config.min_confidence,
+            max_spread=risk_config.max_spread, min_available_size=risk_config.min_available_size,
+            max_depth_fraction=risk_config.max_depth_fraction, risk_reasons=risk_reasons,
         )
+        if rec.action == "BET":
+            ledger.commit(event_key, group, rec.stake_fraction)
         reasons = model.explain(team_a, team_b)
         reasons.extend([
             f"由单局胜率换算 BO{best_of_text}：{team_a} {model_a:.1%}，{team_b} {1-model_a:.1%}",
@@ -90,7 +109,7 @@ def build_lol_report(model: EloModel, evaluation: dict, events: list[dict], *,
         row.update({
             "sport": "lol", "event": title, "scheduled_start": scheduled.isoformat() if scheduled else None,
             "market_probability": prices[best_index], "execution_price": ask,
-            "edge": rec.decision_probability - ask - estimated_cost,
+            "edge": rec.decision_probability - ask - cost,
             "reasons": reasons + list(rec.reasons),
         })
         rows.append(row)
@@ -102,11 +121,20 @@ def build_lol_report(model: EloModel, evaluation: dict, events: list[dict], *,
             "real_money_approved": money_approved, "trained_through": model.trained_through,
             "samples": model.samples,
         },
+        "risk_status": {
+            "bankroll_usdc": bankroll,
+            "max_bet_fraction": risk_config.max_bet_fraction,
+            "max_daily_risk_fraction": risk_config.max_daily_risk_fraction,
+            "max_event_risk_fraction": risk_config.max_event_risk_fraction,
+            "max_drawdown_fraction": risk_config.max_drawdown_fraction,
+            "daily_committed_fraction": ledger.daily_committed,
+        },
         "risk_notes": [
             "没有通过可成交赔率锁箱 ROI 验收前，系统不会给出真实下注金额",
             "临场阵容、首发或突发换人缺失时应降低置信度或 NO BET",
         ],
     }
+
 
 
 def run_daily(model_path: str | Path, output: str | Path, *, dry_run: bool = False) -> dict:

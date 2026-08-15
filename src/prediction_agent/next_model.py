@@ -10,6 +10,8 @@ from pathlib import Path
 from statistics import mean
 from typing import Any, Iterable
 
+from .costs import estimate_cost_rate
+
 
 DEFAULT_FEATURES: dict[str, tuple[str, ...]] = {
     "nba": ("consensus_probability", "injury_impact_diff", "rest_days_diff", "lineup_strength_diff"),
@@ -303,7 +305,7 @@ def walk_forward_evaluate(
                 continue
             price = row.yes_ask if side == 1 else row.no_ask
             won = row.outcome == side
-            fee = 0.03 * (1 - price)
+            fee = estimate_cost_rate(price)
             pnl = ((1 / price) if won else 0.0) - 1.0 - fee
             fold_pnls.append(pnl)
             all_pnls.append(pnl)

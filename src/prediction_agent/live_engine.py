@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 import sqlite3
 from contextlib import contextmanager
@@ -182,7 +183,7 @@ class PolymarketMonitor:
                 depth = bid_depth + ask_depth
                 imbalance = ((bid_depth - ask_depth) / depth) if depth else None
         except Exception:
-            pass
+            logging.debug("order-book enrichment unavailable for %s", market.get("id"), exc_info=True)
         spread = ask - bid if bid is not None and ask is not None else None
         mid = (bid + ask) / 2 if bid is not None and ask is not None else probability
         last = float(market.get("lastTradePrice")) if market.get("lastTradePrice") is not None else probability

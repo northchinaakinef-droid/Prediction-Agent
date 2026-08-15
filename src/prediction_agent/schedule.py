@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import html
+import logging
 import json
 import os
 import re
@@ -148,6 +149,7 @@ class LolScheduleDiscovery:
             text = self.fetch(os.getenv("NEXTMATCH_SCHEDULE_URL", "https://nextmatch.lol/schedule/"))
             results.append(SourceResult("nextmatch", True, parse_nextmatch(text, report_day, self.zone)))
         except Exception as error:
+            logging.exception("schedule source nextmatch failed")
             results.append(SourceResult("nextmatch", False, [], repr(error)))
 
         urls = os.getenv(
@@ -163,6 +165,7 @@ class LolScheduleDiscovery:
             try:
                 secondary.extend(parse_esportagenda(self.fetch(url), report_day, self.zone))
             except Exception as error:
+                logging.exception("schedule source esportagenda failed for %s", url)
                 errors.append(f"{url}: {error!r}")
         results.append(SourceResult("esportagenda", not errors, secondary, "; ".join(errors) or None))
         return results
@@ -175,6 +178,40 @@ def _same_match(left: CanonicalMatch, right: CanonicalMatch) -> bool:
     return same_competition and left_teams == right_teams and abs(
         (left.start_time - right.start_time).total_seconds()
     ) <= 90 * 60
+
+
+def _match_team_key(item: CanonicalMatch) -> tuple:
+    return (item.sport, item.league or "", frozenset((normalized_name(item.team_a), normalized_name(item.team_b))))
+
+
+def detect_source_mismatches(results: Iterable[SourceResult]) -> list[dict]:
+    """Flag cross-source identity mismatches instead of silently trusting one source.
+
+    ``DATA_UNAVAILABLE`` means a source did not return data; ``DATA_MISMATCH`` means
+    two or more sources returned data but disagree on a core identity field.
+    """
+    from collections import defaultdict
+
+    available = [result for result in results if result.available]
+    by_teams: dict[tuple, list[CanonicalMatch]] = defaultdict(list)
+    for result in available:
+        for item in result.matches:
+            by_teams[_match_team_key(item)].append(item)
+
+    mismatches: list[dict] = []
+    for (sport, league, teams), items in by_teams.items():
+        starts = sorted({item.start_time for item in items})
+        sources = sorted({source for item in items for source in item.sources})
+        if len(starts) > 1 and len(sources) >= 2:
+            mismatches.append({
+                "sport": sport,
+                "league": league,
+                "event": " vs ".join(sorted(teams)),
+                "sources": sources,
+                "start_times": [start.isoformat() for start in starts],
+                "reason": "cross-referenced sources disagree on start time",
+            })
+    return mismatches
 
 
 def reconcile_sources(results: Iterable[SourceResult]) -> tuple[list[CanonicalMatch], list[dict]]:
@@ -294,6 +331,7 @@ def build_schedule_audit(results: list[SourceResult], market_events: list[dict],
                          target_leagues: Iterable[str] = TARGET_LOL_LEAGUES,
                          market_search: Callable[[CanonicalMatch], list[dict]] | None = None) -> dict:
     matches, disagreements = reconcile_sources(results)
+    data_mismatches = detect_source_mismatches(results)
     match_markets(matches, market_events)
     if market_search:
         for item in matches:
@@ -301,6 +339,7 @@ def build_schedule_audit(results: list[SourceResult], market_events: list[dict],
                 try:
                     match_markets([item], market_search(item))
                 except Exception as error:
+                    logging.exception("schedule audit market backfill failed for %s", item.match_id)
                     item.missing_reason = f"Polymarket closed-market backfill failed: {error!r}"
     watcher = update_watcher_registry(matches, now=now, path=registry_path)
     by_league = {}
@@ -324,7 +363,7 @@ def build_schedule_audit(results: list[SourceResult], market_events: list[dict],
     insufficient_sources = sum(result.available for result in results) < 2
     accounted = watching + sum(row.watcher_status == "FINISHED" for row in matches)
     incomplete = bool(insufficient_sources or matched < total or accounted < total)
-    source_warning = bool(disagreements or unavailable)
+    source_warning = bool(disagreements or unavailable or data_mismatches)
     source_disagreement_warning = bool(disagreements)
     source_unavailable_warning = bool(unavailable)
     expected_live = sum(row.start_time <= now and row.watcher_status != "FINISHED" for row in matches)
@@ -338,8 +377,12 @@ def build_schedule_audit(results: list[SourceResult], market_events: list[dict],
                      if total else (0.0 if insufficient_sources else 1.0)),
         "market_coverage": (matched / total if total else (0.0 if insufficient_sources else 1.0)),
         "data_incomplete": incomplete,
-        "status": "DATA_INCOMPLETE" if incomplete else ("COMPLETE_WITH_SOURCE_WARNINGS" if source_warning else "COMPLETE"),
+        "status": ("DATA_INCOMPLETE" if incomplete
+                    else "DATA_MISMATCH" if data_mismatches
+                    else "COMPLETE_WITH_SOURCE_WARNINGS" if source_warning else "COMPLETE"),
         "source_warning": source_warning,
+        "data_mismatch_warning": bool(data_mismatches),
+        "data_mismatches": data_mismatches,
         "source_disagreement_warning": source_disagreement_warning,
         "source_unavailable_warning": source_unavailable_warning,
         "watcher_health": {"expected_live": expected_live, "active_live": active_live_watchers,

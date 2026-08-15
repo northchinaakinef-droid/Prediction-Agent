@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 import os
 import unicodedata
@@ -18,8 +19,9 @@ from .providers.live_data import (
     Bo3Cs2Provider, EsportAgendaCs2Provider, EspnNbaProvider, GridOpenAccessProvider, NbaOfficialProvider,
     PandaScoreProvider, SportSrcNbaProvider, TheSportsDbNbaProvider,
 )
-from .risk import recommend
+from .risk import RiskBudgetLedger, RiskConfig, recommend
 from .entities import canonical_team, normalized_name
+from .costs import estimate_cost_rate
 from .schedule import (
     LolScheduleDiscovery, SourceResult, append_schedule_audit, build_schedule_audit, make_match,
 )
@@ -127,8 +129,14 @@ def _main_market(event: dict) -> dict | None:
 
 
 def analyze_sport(sport: str, model: EloModel | NbaModel, evaluation: dict, events: list[dict], *,
-                  now: datetime, bankroll: float, estimated_cost: float = .01,
-                  schedule_matches: list[dict] | None = None) -> list[dict]:
+                  now: datetime, bankroll: float, estimated_cost: float | None = None,
+                  schedule_matches: list[dict] | None = None,
+                  risk_config: RiskConfig | None = None,
+                  ledger: RiskBudgetLedger | None = None,
+                  group_key: str | None = None) -> list[dict]:
+    risk_config = risk_config or RiskConfig()
+    if ledger is None:
+        ledger = RiskBudgetLedger(risk_config, bankroll)
     rows = []
     for event in events:
         market = _main_market(event)
@@ -160,13 +168,25 @@ def analyze_sport(sport: str, model: EloModel | NbaModel, evaluation: dict, even
         probability_ok = bool(evaluation.get("approved_for_probability_use")) and known
         money_ok = bool(evaluation.get("approved_for_real_money"))
         started = scheduled is None or scheduled <= now
+        assert scheduled is not None
+        event_key = str(event.get("id"))
+        group = group_key or f"{sport}:{scheduled.date().isoformat()}"
+        cost = estimate_cost_rate(ask) if estimated_cost is None else estimated_cost
+        cap = ledger.cap_for(event_key, group)
+        risk_reasons = ledger.exhausted_reasons(event_key, group)
         rec = recommend(
-            event_id=str(event.get("id")), outcome=outcomes[side], model_probability=model_ps[side],
+            event_id=event_key, outcome=outcomes[side], model_probability=model_ps[side],
             decimal_odds=1 / ask, bankroll=bankroll, confidence=.75 if probability_ok else .25,
             spread=float(market["spread"]) if market.get("spread") is not None else None,
-            available_size=float(market.get("liquidity") or 0), estimated_cost=estimated_cost,
+            available_size=float(market.get("liquidity") or 0), estimated_cost=cost,
             trading_enabled=probability_ok and not started,
+            kelly_scale=risk_config.kelly_scale, max_bet_fraction=cap,
+            min_edge=risk_config.min_edge, min_confidence=risk_config.min_confidence,
+            max_spread=risk_config.max_spread, min_available_size=risk_config.min_available_size,
+            max_depth_fraction=risk_config.max_depth_fraction, risk_reasons=risk_reasons,
         )
+        if rec.action == "BET":
+            ledger.commit(event_key, group, rec.stake_fraction)
         reasons = (model.explain(team_a, team_b, scheduled)
                    if sport == "nba" and isinstance(model, NbaModel)
                    else model.explain(team_a, team_b))
@@ -191,7 +211,7 @@ def analyze_sport(sport: str, model: EloModel | NbaModel, evaluation: dict, even
             "sport": sport, "event": _text(event.get("title") or ""),
             "scheduled_start": scheduled.isoformat() if scheduled else None,
             "market_probability": prices[side], "execution_price": ask,
-            "edge": rec.decision_probability - ask - estimated_cost,
+            "edge": rec.decision_probability - ask - cost,
             "probability_eligible": probability_ok,
             "real_money_approved": money_ok,
             "market_started": started,
@@ -208,6 +228,7 @@ def analyze_sport(sport: str, model: EloModel | NbaModel, evaluation: dict, even
                         "expected_value": None, "execution_price": None})
         rows.append(row)
     return rows
+
 
 
 def _roster_fresh(last_games: dict[str, str], teams: tuple[str, str], now: datetime,
@@ -241,20 +262,38 @@ def _market_rows(events: list[dict], now: datetime) -> list[tuple[dict, dict, da
 def _research_row(sport: str, event: dict, market: dict, scheduled: datetime | None,
                   outcomes: list[str], prices: list[float], probabilities: list[float], *,
                   probability_ok: bool, money_ok: bool, now: datetime, bankroll: float,
-                  reasons: list[str], estimated_cost: float = .01,
-                  schedule_matches: list[dict] | None = None) -> dict:
+                  reasons: list[str], estimated_cost: float | None = None,
+                  schedule_matches: list[dict] | None = None,
+                  risk_config: RiskConfig | None = None,
+                  ledger: RiskBudgetLedger | None = None,
+                  group_key: str | None = None) -> dict:
+    risk_config = risk_config or RiskConfig()
+    if ledger is None:
+        ledger = RiskBudgetLedger(risk_config, bankroll)
     side = max(range(2), key=lambda index: probabilities[index] - prices[index])
     bid, best_ask = market.get("bestBid"), market.get("bestAsk")
     ask = float(best_ask) if side == 0 and best_ask is not None else (
         1 - float(bid) if side == 1 and bid is not None else prices[side])
     started = scheduled is None or scheduled <= now
+    assert scheduled is not None
+    event_key = str(event.get("id"))
+    group = group_key or f"{sport}:{scheduled.date().isoformat()}"
+    cost = estimate_cost_rate(ask) if estimated_cost is None else estimated_cost
+    cap = ledger.cap_for(event_key, group)
+    risk_reasons = ledger.exhausted_reasons(event_key, group)
     rec = recommend(
-        event_id=str(event.get("id")), outcome=outcomes[side], model_probability=probabilities[side],
+        event_id=event_key, outcome=outcomes[side], model_probability=probabilities[side],
         decimal_odds=1 / ask, bankroll=bankroll, confidence=.75 if probability_ok else .25,
         spread=float(market["spread"]) if market.get("spread") is not None else None,
-        available_size=float(market.get("liquidity") or 0), estimated_cost=estimated_cost,
+        available_size=float(market.get("liquidity") or 0), estimated_cost=cost,
         trading_enabled=probability_ok and not started,
+        kelly_scale=risk_config.kelly_scale, max_bet_fraction=cap,
+        min_edge=risk_config.min_edge, min_confidence=risk_config.min_confidence,
+        max_spread=risk_config.max_spread, min_available_size=risk_config.min_available_size,
+        max_depth_fraction=risk_config.max_depth_fraction, risk_reasons=risk_reasons,
     )
+    if rec.action == "BET":
+        ledger.commit(event_key, group, rec.stake_fraction)
     if not probability_ok:
         reasons.append("阵容未知、阵容过期、样本不足或概率模型未通过验收，因此只展示研究值。")
     if not money_ok:
@@ -269,13 +308,12 @@ def _research_row(sport: str, event: dict, market: dict, scheduled: datetime | N
     schedule_match = _find_schedule_match(schedule_matches, sport, outcomes[0], outcomes[1], scheduled)
     row = asdict(rec)
     row["generated_at"] = rec.generated_at.isoformat()
-    assert scheduled is not None
     hours_to_start, decision_window = _timing(scheduled, now)
     row.update({
         "sport": sport, "event": _text(event.get("title") or ""),
         "scheduled_start": scheduled.isoformat() if scheduled else None,
         "market_probability": prices[side], "execution_price": ask,
-        "edge": rec.decision_probability - ask - estimated_cost,
+        "edge": rec.decision_probability - ask - cost,
         "probability_eligible": probability_ok,
         "real_money_approved": money_ok,
         "market_started": started,
@@ -293,9 +331,13 @@ def _research_row(sport: str, event: dict, market: dict, scheduled: datetime | N
     return row
 
 
+
 def analyze_cs2(model: Cs2Model, evaluation: dict, events: list[dict], *,
                 now: datetime, bankroll: float,
-                schedule_matches: list[dict] | None = None) -> list[dict]:
+                schedule_matches: list[dict] | None = None,
+                risk_config: RiskConfig | None = None,
+                ledger: RiskBudgetLedger | None = None,
+                group_key: str | None = None) -> list[dict]:
     rows = []
     for event, market, scheduled, outcomes, prices in _market_rows(events, now):
         schedule_match = _find_schedule_match(schedule_matches, "cs2", outcomes[0], outcomes[1], scheduled)
@@ -317,13 +359,16 @@ def analyze_cs2(model: Cs2Model, evaluation: dict, events: list[dict], *,
                                   [probability, 1-probability], probability_ok=probability_ok,
                                   money_ok=bool(evaluation.get("approved_for_real_money")),
                                   now=now, bankroll=bankroll, reasons=reasons,
-                                  schedule_matches=schedule_matches))
+                                  schedule_matches=schedule_matches, risk_config=risk_config, ledger=ledger, group_key=group_key))
     return rows
 
 
 def analyze_lol_meta(model: LolMetaModel, evaluation: dict, events: list[dict], *,
                      now: datetime, bankroll: float,
-                     schedule_matches: list[dict] | None = None) -> list[dict]:
+                     schedule_matches: list[dict] | None = None,
+                     risk_config: RiskConfig | None = None,
+                     ledger: RiskBudgetLedger | None = None,
+                     group_key: str | None = None) -> list[dict]:
     rows = []
     for event, market, scheduled, outcomes, prices in _market_rows(events, now):
         if not _is_major_lol_event(event.get("title")):
@@ -352,7 +397,7 @@ def analyze_lol_meta(model: LolMetaModel, evaluation: dict, events: list[dict], 
                                   [probability, 1-probability], probability_ok=probability_ok,
                                   money_ok=bool(evaluation.get("approved_for_real_money")),
                                   now=now, bankroll=bankroll, reasons=reasons,
-                                  schedule_matches=schedule_matches))
+                                  schedule_matches=schedule_matches, risk_config=risk_config, ledger=ledger, group_key=group_key))
     return rows
 
 
@@ -362,6 +407,18 @@ def run_all(model_dir: str | Path, output: str | Path, *, now: datetime | None =
     zone = ZoneInfo(os.getenv("REPORT_TIMEZONE", "Asia/Singapore"))
     report_day = report_day or now.astimezone(zone).date()
     bankroll = float(os.getenv("BANKROLL_USDC", "10000"))
+    risk_config = RiskConfig.from_env()
+    ledger = RiskBudgetLedger(risk_config, bankroll)
+    paper_db = os.getenv("PAPER_DB_PATH", "data/daily/paper.db")
+    ledger.load_prior(paper_db, report_day.isoformat())
+    try:
+        from .paper_store import current_drawdown
+        drawdown = current_drawdown(paper_db, bankroll) if Path(paper_db).exists() else 0.0
+    except Exception:
+        logging.exception("run_all: unable to compute drawdown from paper_store")
+        drawdown = 0.0
+    if drawdown >= risk_config.max_drawdown_fraction:
+        ledger.breaker_reason = "account drawdown circuit breaker triggered"
     recommendations, statuses = [], {}
     client = PolymarketClient(timeout=30)
     market_events = {sport: client.all_events_by_tag(tag, page_size=100) for sport, tag in TAGS.items()}
@@ -383,6 +440,7 @@ def run_all(model_dir: str | Path, output: str | Path, *, now: datetime | None =
             ) for row in events if row.start_time.astimezone(zone).date() == report_day]
             return SourceResult(name, True, matches)
         except Exception as error:
+            logging.exception("external_source %s failed", name)
             return SourceResult(name, False, [], repr(error))
 
     nba_sources = [
@@ -438,13 +496,16 @@ def run_all(model_dir: str | Path, output: str | Path, *, now: datetime | None =
         events = market_events[sport]
         if sport == "cs2":
             sport_rows = analyze_cs2(model, evaluation, events, now=now, bankroll=bankroll,
-                                     schedule_matches=audit_matches[sport])
+                                     schedule_matches=audit_matches[sport], risk_config=risk_config,
+                                     ledger=ledger, group_key=f"{sport}:{report_day.isoformat()}")
         elif sport == "lol":
             sport_rows = analyze_lol_meta(model, evaluation, events, now=now, bankroll=bankroll,
-                                          schedule_matches=audit_matches[sport])
+                                          schedule_matches=audit_matches[sport], risk_config=risk_config,
+                                          ledger=ledger, group_key=f"{sport}:{report_day.isoformat()}")
         else:
             sport_rows = analyze_sport(sport, model, evaluation, events, now=now, bankroll=bankroll,
-                                       schedule_matches=audit_matches[sport])
+                                       schedule_matches=audit_matches[sport], risk_config=risk_config,
+                                       ledger=ledger, group_key=f"{sport}:{report_day.isoformat()}")
         recommendations.extend(sport_rows)
         statuses[sport] = {
             "ready": True, "artifact_ready": True,
@@ -456,12 +517,26 @@ def run_all(model_dir: str | Path, output: str | Path, *, now: datetime | None =
             "today_probability_eligible": sum(row["probability_eligible"] for row in sport_rows),
             "today_bet_candidates": sum(row["action"] == "BET" for row in sport_rows),
         }
+    risk_notes = ["NBA、LoL、CS2 分别训练和验收；CBA 已暂停。历史可成交赔率 ROI 验收前均保持 NO_BET。"]
+    if ledger.breaker_reason:
+        risk_notes.append(ledger.breaker_reason)
     report = {
         "report_date": report_day.isoformat(), "generated_at": now.isoformat(),
         "bankroll_usdc": bankroll, "recommendations": recommendations, "sport_status": statuses,
         "schedule_coverage": audits,
         "data_incomplete": any(audit["data_incomplete"] for audit in audits.values()),
-        "risk_notes": ["NBA、LoL、CS2 分别训练和验收；CBA 已暂停。历史可成交赔率 ROI 验收前均保持 NO_BET。"],
+        "risk_notes": risk_notes,
+        "risk_status": {
+            "bankroll_usdc": bankroll,
+            "max_bet_fraction": risk_config.max_bet_fraction,
+            "max_daily_risk_fraction": risk_config.max_daily_risk_fraction,
+            "max_event_risk_fraction": risk_config.max_event_risk_fraction,
+            "max_drawdown_fraction": risk_config.max_drawdown_fraction,
+            "daily_committed_fraction": ledger.daily_committed,
+            "current_drawdown": drawdown,
+            "circuit_breaker": ledger.breaker_reason is not None,
+            "circuit_breaker_reason": ledger.breaker_reason,
+        },
     }
     Path(output).parent.mkdir(parents=True, exist_ok=True)
     Path(output).write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")

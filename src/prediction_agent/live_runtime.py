@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -396,6 +397,7 @@ class LiveSupervisor:
                                         "checked_at": datetime.now(timezone.utc).isoformat()}
             return rows
         except Exception as error:
+            logging.exception("live_runtime source %s failed", name)
             self.source_status[name] = {"available": False, "rows": 0, "error": repr(error),
                                         "checked_at": datetime.now(timezone.utc).isoformat()}
             return []

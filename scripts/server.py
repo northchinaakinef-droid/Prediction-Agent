@@ -72,6 +72,8 @@ def run_once(*, notify: bool = True) -> None:
             STATE["paper_settlement"] = settle_pending(paper_path)
             STATE["paper_store"] = record_report(paper_path, report)
             report["paper_summary"] = paper_summary(paper_path)
+            STATE["paper_summary"] = report["paper_summary"]
+            STATE["risk_status"] = report.get("risk_status")
             STATE["last_scan"] = datetime.now(timezone.utc).isoformat()
             if notify:
                 _send(report)

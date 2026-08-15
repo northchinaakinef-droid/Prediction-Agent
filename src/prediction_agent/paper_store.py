@@ -3,12 +3,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import sqlite3
 from contextlib import closing
 from pathlib import Path
 from typing import Any
 
 from .providers.polymarket import PolymarketClient
+from .costs import estimate_cost
 
 
 SCHEMA = """
@@ -162,7 +164,7 @@ def summary(path: str | Path) -> dict[str, Any]:
             squared.append((float(probability) - float(won)) ** 2)
             if action == "BET" and float(stake) > 0 and execution:
                 shares = float(stake) / float(execution)
-                fee = shares * .03 * float(execution) * (1 - float(execution))
+                fee = estimate_cost(float(execution), float(stake))
                 profit += shares * int(won) - float(stake) - fee
                 turnover += float(stake)
         by_sport[sport].update({"settled_predictions": len(sport_rows),
@@ -171,6 +173,54 @@ def summary(path: str | Path) -> dict[str, Any]:
                                 "paper_roi": profit / turnover if turnover else None})
     return {"runs": runs, "predictions": predictions, "settled": settled,
             "by_sport": by_sport}
+
+
+def committed_exposure(path: str | Path, report_date: str, bankroll: float) -> tuple[float, dict[str, float]]:
+    """Return already-committed BET stake fractions for a report date."""
+    target = Path(path)
+    if not target.exists() or bankroll <= 0:
+        return 0.0, {}
+    with closing(sqlite3.connect(target)) as connection:
+        connection.executescript(SCHEMA)
+        rows = connection.execute(
+            "SELECT p.event_id, SUM(p.stake) FROM predictions p JOIN report_runs r ON p.run_id = r.run_id WHERE p.action = 'BET' AND r.report_date = ? GROUP BY p.event_id",
+            (report_date,),
+        ).fetchall()
+    event_stakes = {str(event_id): float(stake) for event_id, stake in rows if stake is not None}
+    daily = sum(event_stakes.values()) / bankroll
+    events = {event_id: stake / bankroll for event_id, stake in event_stakes.items()}
+    return daily, events
+
+
+def current_drawdown(path: str | Path, bankroll: float) -> float:
+    """Return current peak-to-trough drawdown fraction from settled paper bets.
+
+    Real-money mode would replace this with an external account-balance feed;
+    the paper ledger already stores the forward settlement data needed for a
+    conservative enforcement of MAX_DRAWDOWN_FRACTION today.
+    """
+    target = Path(path)
+    if not target.exists() or bankroll <= 0:
+        return 0.0
+    with closing(sqlite3.connect(target)) as connection:
+        connection.executescript(SCHEMA)
+        rows = connection.execute(
+            """SELECT p.stake, p.execution_price, p.outcome, s.winner, s.settled_at
+               FROM predictions p JOIN settlements s
+                 ON p.sport=s.sport AND p.event_id=s.event_id
+               WHERE p.action='BET' AND p.stake > 0 AND p.execution_price IS NOT NULL
+               ORDER BY s.settled_at"""
+        ).fetchall()
+    equity = peak = float(bankroll)
+    for stake, execution, outcome, winner, _ in rows:
+        stake = float(stake)
+        execution = float(execution)
+        shares = stake / execution
+        won = 1.0 if outcome == winner else 0.0
+        pnl = shares * won - stake - estimate_cost(execution, stake)
+        equity += pnl
+        peak = max(peak, equity)
+    return (peak - equity) / peak if peak > 0 else 0.0
 
 
 def _list(value: Any) -> list[Any]:
@@ -196,6 +246,7 @@ def settle_pending(path: str | Path, client: PolymarketClient | None = None) -> 
                 event = client.event(str(event_id))
             except Exception:
                 errors += 1
+                logging.exception('settle_pending: unexpected error contacting Polymarket for %s', event_id)
                 continue
             winner = None
             market_payload = None
