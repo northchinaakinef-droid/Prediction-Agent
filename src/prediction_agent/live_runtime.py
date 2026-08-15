@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -250,7 +251,7 @@ class LiveSupervisor:
                 key, state.sport, "IMPORTANT", 70, "POSTMATCH_REVIEW",
                 f"{state.team_a} vs {state.team_b}",
                 f"比赛已结束，实际胜者：{actual_team}。",
-                reasons, now, f"{key}:POSTMATCH_REVIEW:{state.observed_at.isoformat()}",
+                reasons, now, f"{key}:POSTMATCH_REVIEW",
                 {
                     "event_id": state.source_id,
                     "actual_winner": actual_team,
@@ -396,6 +397,7 @@ class LiveSupervisor:
                                         "checked_at": datetime.now(timezone.utc).isoformat()}
             return rows
         except Exception as error:
+            logging.exception("live_runtime source %s failed", name)
             self.source_status[name] = {"available": False, "rows": 0, "error": repr(error),
                                         "checked_at": datetime.now(timezone.utc).isoformat()}
             return []

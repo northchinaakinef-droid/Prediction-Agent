@@ -32,6 +32,8 @@ class LolGame:
     team_a: str
     team_b: str
     team_a_won: int
+    margin: float | None = None
+    location: str | None = None
 
 
 @dataclass
@@ -62,6 +64,48 @@ class EloModel:
     @classmethod
     def from_dict(cls, value: dict) -> "EloModel":
         return cls(**value)
+
+
+def player_level_team_rating(player_ratings: dict[str, float], roster: Iterable[str],
+                               base_rating: float = 1500.0) -> float:
+    players = tuple(roster)
+    if not players:
+        return base_rating
+    return mean(player_ratings.get(player, base_rating) for player in players)
+
+
+def roster_adjusted_probability(team_a_rating: float, team_b_rating: float,
+                                roster_a_rating: float, roster_b_rating: float,
+                                team_weight: float = 0.65) -> float:
+    a = team_weight * team_a_rating + (1 - team_weight) * roster_a_rating
+    b = team_weight * team_b_rating + (1 - team_weight) * roster_b_rating
+    return 1 / (1 + 10 ** ((b - a) / 400))
+
+
+def recent_form_rating(games: Iterable[LolGame], team: str, before: datetime,
+                       window: int = 8) -> float:
+    prior = sorted(
+        (g for g in games if g.played_at < before and team in {g.team_a, g.team_b}),
+        key=lambda g: g.played_at,
+    )[-window:]
+    if not prior:
+        return 0.5
+    wins = sum(1 for g in prior if (g.team_a == team and g.team_a_won) or (g.team_b == team and not g.team_a_won))
+    return wins / len(prior)
+
+
+def patch_adaptation_uncertainty(days_since_patch: float, adaptation_days: int = 7) -> float:
+    if days_since_patch < 0:
+        raise ValueError("days_since_patch must be non-negative")
+    if days_since_patch >= adaptation_days:
+        return 1.0
+    return 0.5 + 0.5 * (days_since_patch / adaptation_days)
+
+
+def side_advantage(patch: str, region: str,
+                   table: dict[tuple[str, str], float] | None = None) -> float:
+    table = table or {("14.1", "LCK"): 0.045, ("14.1", "LPL"): 0.030, ("14.2", "LCK"): 0.038}
+    return table.get((patch, region), 0.0)
 
 
 def load_oracle_elixir(paths: Iterable[str | Path]) -> list[LolGame]:
@@ -241,7 +285,9 @@ def _prequential(model: EloModel, games: list[LolGame]) -> tuple[dict, EloModel]
 
 
 def save_model(model: EloModel, path: str | Path, evaluation: dict | None = None) -> None:
-    payload = {"model": model.as_dict(), "evaluation": evaluation or {}}
+    if evaluation is None or "approved_for_real_money" not in evaluation or not evaluation.get("validation"):
+        raise ValueError("refusing to write model without a complete evaluation record")
+    payload = {"model": model.as_dict(), "evaluation": evaluation}
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     Path(path).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 

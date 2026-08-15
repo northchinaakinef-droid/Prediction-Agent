@@ -89,6 +89,27 @@ class LiveRuntimeTests(unittest.TestCase):
         self.assertIn("赛前预测", alerts[0].reasons[0])
         self.assertIn("BP后预测", alerts[0].reasons[1])
 
+    def test_postmatch_review_dedupe_key_is_stable_across_scans(self):
+        now = datetime.now(timezone.utc)
+        with tempfile.TemporaryDirectory() as temp:
+            supervisor = LiveSupervisor(root=Path(temp))
+            first = LiveState(
+                "leaguepedia", "g1", "lol", now, "FINISHED", "T1", "Gen.G",
+                features={"winner_side": "b", "post_draft_probability": .55},
+                finished=True,
+            )
+            second = LiveState(
+                "leaguepedia", "g1", "lol", now + timedelta(seconds=30), "FINISHED",
+                "T1", "Gen.G", features={"winner_side": "b", "post_draft_probability": .55},
+                finished=True,
+            )
+            first_alert = supervisor._result_review_alerts([first], now)[0]
+            second_alert = supervisor._result_review_alerts(
+                [second], now + timedelta(seconds=30)
+            )[0]
+        self.assertEqual(first_alert.dedupe_key, second_alert.dedupe_key)
+        self.assertTrue(first_alert.dedupe_key.endswith(":POSTMATCH_REVIEW"))
+
     def test_nba_start_and_finish_lifecycle_alerts(self):
         now = datetime.now(timezone.utc)
         with tempfile.TemporaryDirectory() as temp:

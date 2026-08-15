@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import math
+import os
+from dataclasses import dataclass, field
 
 from .models import Recommendation
 
@@ -26,6 +28,121 @@ def kelly_fraction(probability: float, decimal_odds: float) -> float:
     return max(0.0, (probability * decimal_odds - 1) / net)
 
 
+@dataclass(frozen=True)
+class RiskConfig:
+    """Environment-wired risk limits with the legacy hardcoded values as defaults.
+
+    The values in ``.env.example`` are no longer phantom config: ``RiskConfig.from_env()``
+    reads them once and the daily/live paths pass the resulting object into every
+    ``recommend()`` call site.
+    """
+    kelly_scale: float = 0.25
+    max_bet_fraction: float = 0.0075
+    max_daily_risk_fraction: float = 0.025
+    max_event_risk_fraction: float = 0.01
+    max_drawdown_fraction: float = 0.10
+    max_correlation_group_fraction: float = 0.05
+    max_depth_fraction: float = 0.10
+    min_edge: float = 0.025
+    min_confidence: float = 0.60
+    max_spread: float = 0.03
+    min_available_size: float = 100.0
+
+    @classmethod
+    def from_env(cls) -> "RiskConfig":
+        def read(name: str, default: float) -> float:
+            raw = os.getenv(name)
+            if raw is None or not str(raw).strip():
+                return default
+            value = float(raw)
+            if value < 0:
+                raise ValueError(f"{name} must be non-negative")
+            return value
+
+        return cls(
+            kelly_scale=read("KELLY_FRACTION", 0.25),
+            max_bet_fraction=read("MAX_BET_FRACTION", 0.0075),
+            max_daily_risk_fraction=read("MAX_DAILY_RISK_FRACTION", 0.025),
+            max_event_risk_fraction=read("MAX_EVENT_RISK_FRACTION", 0.01),
+            max_drawdown_fraction=read("MAX_DRAWDOWN_FRACTION", 0.10),
+            max_correlation_group_fraction=read("MAX_CORRELATION_GROUP_FRACTION", 0.05),
+            max_depth_fraction=read("MAX_DEPTH_FRACTION", 0.10),
+            min_edge=read("MIN_EDGE", 0.025),
+            min_confidence=read("MIN_CONFIDENCE", 0.60),
+            max_spread=read("MAX_SPREAD", 0.03),
+            min_available_size=read("MIN_AVAILABLE_SIZE", 100.0),
+        )
+
+
+@dataclass
+class RiskBudgetLedger:
+    """Accumulates committed stake fractions within one daily run.
+
+    The daily cap, same-event cap, and same correlation-group cap are all enforced
+    through this object by computing an effective per-bet cap before calling
+    ``recommend()`` and then committing the actual returned ``stake_fraction``.
+    """
+    config: RiskConfig
+    bankroll: float
+    daily_committed: float = 0.0
+    event_committed: dict[str, float] = field(default_factory=dict)
+    group_committed: dict[str, float] = field(default_factory=dict)
+    breaker_reason: str | None = None
+
+    def load_prior(self, path: str | None, report_date: str) -> None:
+        if not path:
+            return
+        try:
+            from .paper_store import committed_exposure
+            daily, events = committed_exposure(path, report_date, self.bankroll)
+        except Exception:
+            # A corrupt/unreadable ledger should not silently blow up the daily run,
+            # but it also must not make the system think it has zero exposure.
+            self.breaker_reason = "paper ledger unavailable; risk budget could not be restored"
+            return
+        self.daily_committed = max(self.daily_committed, daily)
+        for event_id, fraction in events.items():
+            self.event_committed[event_id] = max(self.event_committed.get(event_id, 0.0), fraction)
+
+    def remaining_daily(self) -> float:
+        return max(0.0, self.config.max_daily_risk_fraction - self.daily_committed)
+
+    def remaining_event(self, event_id: str) -> float:
+        used = self.event_committed.get(event_id, 0.0)
+        return max(0.0, self.config.max_event_risk_fraction - used)
+
+    def remaining_group(self, group_key: str) -> float:
+        used = self.group_committed.get(group_key, 0.0)
+        return max(0.0, self.config.max_correlation_group_fraction - used)
+
+    def cap_for(self, event_id: str, group_key: str | None = None) -> float:
+        if self.breaker_reason:
+            return 0.0
+        cap = min(self.config.max_bet_fraction, self.remaining_daily(), self.remaining_event(event_id))
+        if group_key:
+            cap = min(cap, self.remaining_group(group_key))
+        return max(0.0, cap)
+
+    def exhausted_reasons(self, event_id: str, group_key: str | None = None) -> tuple[str, ...]:
+        reasons: list[str] = []
+        if self.breaker_reason:
+            reasons.append(self.breaker_reason)
+        if self.remaining_daily() <= 0:
+            reasons.append("daily risk budget exhausted")
+        if self.remaining_event(event_id) <= 0:
+            reasons.append("event risk budget exhausted")
+        if group_key and self.remaining_group(group_key) <= 0:
+            reasons.append("correlation-group risk budget exhausted")
+        return tuple(reasons)
+
+    def commit(self, event_id: str, group_key: str | None, stake_fraction: float) -> None:
+        fraction = max(0.0, float(stake_fraction))
+        self.daily_committed += fraction
+        self.event_committed[event_id] = self.event_committed.get(event_id, 0.0) + fraction
+        if group_key:
+            self.group_committed[group_key] = self.group_committed.get(group_key, 0.0) + fraction
+
+
 def recommend(
     *,
     event_id: str,
@@ -45,8 +162,15 @@ def recommend(
     estimated_cost: float = 0.0,
     require_market_quality: bool = True,
     trading_enabled: bool = False,
+    max_depth_fraction: float = 0.10,
+    risk_reasons: tuple[str, ...] = (),
 ) -> Recommendation:
-    """Risk-capped recommendation with uncertainty shrinkage toward the market."""
+    """Risk-capped recommendation with uncertainty shrinkage toward the market.
+
+    ``max_bet_fraction`` is the caller-computed effective per-bet cap (already
+    reduced for daily/event/group budget constraints).  ``risk_reasons`` lets the
+    caller inject the budget/breaker reasons that caused that cap.
+    """
     if bankroll < 0 or not 0 <= confidence <= 1:
         raise ValueError("invalid bankroll or confidence")
     market_probability = decimal_implied_probability(decimal_odds)
@@ -57,12 +181,24 @@ def recommend(
     net_edge = edge - max(0.0, estimated_cost)
     ev = shrunk_probability * decimal_odds - 1 - max(0.0, estimated_cost)
     raw_fraction = kelly_fraction(shrunk_probability, decimal_odds) * kelly_scale
-    stake_fraction = min(max_bet_fraction, raw_fraction)
+    stake_fraction = min(max(0.0, max_bet_fraction), max(0.0, raw_fraction))
     reasons: list[str] = [
         f"uncertainty-adjusted edge={edge:.2%}",
         f"cost-adjusted edge={net_edge:.2%}",
         f"net EV={ev:.2%}",
     ]
+    reasons.extend(risk_reasons)
+    if max_bet_fraction <= 0:
+        reasons.append("risk cap allows zero stake")
+
+    # Capacity check: never consume more than a configurable fraction of visible depth.
+    if (stake_fraction > 0 and available_size is not None and max_depth_fraction > 0
+            and bankroll > 0 and available_size >= 0):
+        depth_fraction = (available_size * max_depth_fraction) / bankroll
+        if stake_fraction > depth_fraction:
+            reasons.append(f"stake capped to {max_depth_fraction:.0%} of available depth")
+            stake_fraction = max(0.0, depth_fraction)
+
     if net_edge < min_edge:
         reasons.append("cost-adjusted edge below threshold")
     if confidence < min_confidence:
@@ -79,7 +215,7 @@ def recommend(
     if liquidity_too_low:
         reasons.append("insufficient available size")
     if (not trading_enabled or net_edge < min_edge or confidence < min_confidence or not math.isfinite(ev) or ev <= 0
-            or market_quality_missing or spread_too_wide or liquidity_too_low):
+            or market_quality_missing or spread_too_wide or liquidity_too_low or stake_fraction <= 0):
         action, stake_fraction = "NO_BET", 0.0
     else:
         action = "BET"

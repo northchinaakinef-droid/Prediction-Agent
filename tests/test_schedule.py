@@ -5,8 +5,8 @@ import unittest
 from zoneinfo import ZoneInfo
 
 from prediction_agent.schedule import (
-    SourceResult, build_schedule_audit, make_match, match_markets, parse_esportagenda, parse_nextmatch,
-    reconcile_sources,
+    SourceResult, build_schedule_audit, detect_source_mismatches, make_match, match_markets,
+    parse_esportagenda, parse_nextmatch, reconcile_sources,
 )
 
 
@@ -107,6 +107,17 @@ class ScheduleTests(unittest.TestCase):
         self.assertEqual(len(expected), 1)
         self.assertFalse(disagreements)
         self.assertEqual({expected[0].team_a, expected[0].team_b}, {"Ninjas in Pyjamas", "LNG Esports"})
+
+    def test_source_time_mismatch_is_flagged_as_data_mismatch(self):
+        start_a = datetime(2026, 8, 14, 8, tzinfo=timezone.utc)
+        start_b = datetime(2026, 8, 14, 12, tzinfo=timezone.utc)
+        a = make_match(source="a", league="LCK", team_a="T1", team_b="DK",
+                       start_time=start_a, event_name="LCK")
+        b = make_match(source="b", league="LCK", team_a="T1", team_b="Dplus KIA",
+                       start_time=start_b, event_name="LCK")
+        mismatches = detect_source_mismatches([SourceResult("a", True, [a]), SourceResult("b", True, [b])])
+        self.assertEqual(len(mismatches), 1)
+        self.assertIn("cross-referenced sources disagree on start time", mismatches[0]["reason"])
 
 
 if __name__ == "__main__":

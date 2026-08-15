@@ -3,12 +3,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import sqlite3
 from contextlib import closing
 from pathlib import Path
 from typing import Any
 
 from .providers.polymarket import PolymarketClient
+from .costs import estimate_cost
+from .narrative import build_post_match_summary
 
 
 SCHEMA = """
@@ -30,6 +33,8 @@ CREATE TABLE IF NOT EXISTS predictions (
     model_probability REAL NOT NULL,
     market_probability REAL,
     execution_price REAL,
+    closing_price REAL,
+    clv REAL,
     action TEXT NOT NULL,
     stake REAL NOT NULL,
     probability_eligible INTEGER NOT NULL,
@@ -68,6 +73,14 @@ def _id(*values: object) -> str:
     return hashlib.sha256("|".join(str(value) for value in values).encode("utf-8")).hexdigest()
 
 
+def _migrate_predictions(connection: sqlite3.Connection) -> None:
+    columns = {row[1] for row in connection.execute("PRAGMA table_info(predictions)")}
+    if "closing_price" not in columns:
+        connection.execute("ALTER TABLE predictions ADD COLUMN closing_price REAL")
+    if "clv" not in columns:
+        connection.execute("ALTER TABLE predictions ADD COLUMN clv REAL")
+
+
 def record_report(path: str | Path, report: dict[str, Any]) -> dict[str, int | str]:
     """Persist one immutable report and its rows; retries are idempotent."""
     target = Path(path)
@@ -77,6 +90,7 @@ def record_report(path: str | Path, report: dict[str, Any]) -> dict[str, int | s
     inserted = 0
     with closing(sqlite3.connect(target)) as connection:
         connection.executescript(SCHEMA)
+        _migrate_predictions(connection)
         cursor = connection.execute(
             "INSERT OR IGNORE INTO report_runs VALUES (?, ?, ?, ?)",
             (run_id, generated, str(report.get("report_date", "")),
@@ -87,14 +101,19 @@ def record_report(path: str | Path, report: dict[str, Any]) -> dict[str, int | s
             for row in report.get("recommendations", []):
                 prediction_id = _id(run_id, row.get("sport"), row.get("event_id"), row.get("outcome"))
                 cursor = connection.execute(
-                    """INSERT OR IGNORE INTO predictions VALUES
-                    (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    """INSERT OR IGNORE INTO predictions
+                    (prediction_id, run_id, generated_at, sport, event_id, event,
+                     scheduled_start, outcome, model_probability, market_probability,
+                     execution_price, closing_price, clv, action, stake,
+                     probability_eligible, real_money_approved, market_started, payload_json)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (prediction_id, run_id, str(row.get("generated_at", generated)),
                      str(row.get("sport", "")), str(row.get("event_id", "")), row.get("event"),
                      row.get("scheduled_start"), str(row.get("outcome", "")),
                      row.get("model_probability"), row.get("market_probability"),
-                     row.get("execution_price"), str(row.get("action", "NO_BET")),
-                     float(row.get("stake") or 0), int(bool(row.get("probability_eligible"))),
+                     row.get("execution_price"), row.get("closing_price"), row.get("clv"),
+                     str(row.get("action", "NO_BET")), float(row.get("stake") or 0),
+                     int(bool(row.get("probability_eligible"))),
                      int(bool(row.get("real_money_approved"))), int(bool(row.get("market_started"))),
                      json.dumps(row, ensure_ascii=False)),
                 )
@@ -133,6 +152,7 @@ def summary(path: str | Path) -> dict[str, Any]:
         return {"runs": 0, "predictions": 0, "settled": 0, "by_sport": {}}
     with closing(sqlite3.connect(target)) as connection:
         connection.executescript(SCHEMA)
+        _migrate_predictions(connection)
         runs = connection.execute("SELECT COUNT(*) FROM report_runs").fetchone()[0]
         predictions = connection.execute("SELECT COUNT(*) FROM predictions").fetchone()[0]
         settled = connection.execute("SELECT COUNT(*) FROM settlements").fetchone()[0]
@@ -142,7 +162,7 @@ def summary(path: str | Path) -> dict[str, Any]:
         ).fetchall()
         evaluated = connection.execute(
             """SELECT p.sport, p.outcome, p.model_probability, p.action, p.stake,
-                      p.execution_price, s.winner
+                      p.execution_price, s.winner, p.clv
                FROM predictions p JOIN settlements s
                  ON p.sport=s.sport AND p.event_id=s.event_id
                WHERE p.market_started=0"""
@@ -156,21 +176,119 @@ def summary(path: str | Path) -> dict[str, Any]:
     for row in evaluated:
         grouped.setdefault(row[0], []).append(row)
     for sport, sport_rows in grouped.items():
-        squared, profit, turnover = [], 0.0, 0.0
-        for _, outcome, probability, action, stake, execution, winner in sport_rows:
+        squared, profit, turnover, clv_values = [], 0.0, 0.0, []
+        for _, outcome, probability, action, stake, execution, winner, clv in sport_rows:
             won = outcome == winner
             squared.append((float(probability) - float(won)) ** 2)
             if action == "BET" and float(stake) > 0 and execution:
                 shares = float(stake) / float(execution)
-                fee = shares * .03 * float(execution) * (1 - float(execution))
+                fee = estimate_cost(float(execution), float(stake))
                 profit += shares * int(won) - float(stake) - fee
                 turnover += float(stake)
+            if clv is not None:
+                clv_values.append(float(clv))
         by_sport[sport].update({"settled_predictions": len(sport_rows),
                                 "model_brier": sum(squared) / len(squared),
                                 "paper_profit": profit,
-                                "paper_roi": profit / turnover if turnover else None})
+                                "paper_roi": profit / turnover if turnover else None,
+                                "mean_clv": sum(clv_values) / len(clv_values) if clv_values else None})
     return {"runs": runs, "predictions": predictions, "settled": settled,
             "by_sport": by_sport}
+
+
+def committed_exposure(path: str | Path, report_date: str, bankroll: float) -> tuple[float, dict[str, float]]:
+    """Return already-committed BET stake fractions for a report date."""
+    target = Path(path)
+    if not target.exists() or bankroll <= 0:
+        return 0.0, {}
+    with closing(sqlite3.connect(target)) as connection:
+        connection.executescript(SCHEMA)
+        rows = connection.execute(
+            "SELECT p.event_id, SUM(p.stake) FROM predictions p JOIN report_runs r ON p.run_id = r.run_id WHERE p.action = 'BET' AND r.report_date = ? GROUP BY p.event_id",
+            (report_date,),
+        ).fetchall()
+    event_stakes = {str(event_id): float(stake) for event_id, stake in rows if stake is not None}
+    daily = sum(event_stakes.values()) / bankroll
+    events = {event_id: stake / bankroll for event_id, stake in event_stakes.items()}
+    return daily, events
+
+
+def current_drawdown(path: str | Path, bankroll: float) -> float:
+    """Return current peak-to-trough drawdown fraction from settled paper bets.
+
+    Real-money mode would replace this with an external account-balance feed;
+    the paper ledger already stores the forward settlement data needed for a
+    conservative enforcement of MAX_DRAWDOWN_FRACTION today.
+    """
+    target = Path(path)
+    if not target.exists() or bankroll <= 0:
+        return 0.0
+    with closing(sqlite3.connect(target)) as connection:
+        connection.executescript(SCHEMA)
+        rows = connection.execute(
+            """SELECT p.stake, p.execution_price, p.outcome, s.winner, s.settled_at
+               FROM predictions p JOIN settlements s
+                 ON p.sport=s.sport AND p.event_id=s.event_id
+               WHERE p.action='BET' AND p.stake > 0 AND p.execution_price IS NOT NULL
+               ORDER BY s.settled_at"""
+        ).fetchall()
+    equity = peak = float(bankroll)
+    for stake, execution, outcome, winner, _ in rows:
+        stake = float(stake)
+        execution = float(execution)
+        shares = stake / execution
+        won = 1.0 if outcome == winner else 0.0
+        pnl = shares * won - stake - estimate_cost(execution, stake)
+        equity += pnl
+        peak = max(peak, equity)
+    return (peak - equity) / peak if peak > 0 else 0.0
+
+
+def record_closing_line(path: str | Path, sport: str, event_id: str, closing_price: float) -> None:
+    """Record the T-0 closing price once the market closes.
+
+    CLV is signed such that a positive value means the recorded execution price
+    was better than the final closing consensus.
+    """
+    target = Path(path)
+    with closing(sqlite3.connect(target)) as connection:
+        connection.executescript(SCHEMA)
+        _migrate_predictions(connection)
+        connection.execute(
+            """UPDATE predictions
+               SET closing_price = ?,
+                   clv = CASE WHEN execution_price IS NOT NULL THEN ? - execution_price ELSE NULL END
+               WHERE sport = ? AND event_id = ?""",
+            (float(closing_price), float(closing_price), sport, event_id),
+        )
+        connection.commit()
+
+
+def paper_review(path: str | Path, since: str = "1970-01-01") -> list[dict[str, Any]]:
+    """Return settled post-match reviews sorted by biggest miss first."""
+    target = Path(path)
+    if not target.exists():
+        return []
+    with closing(sqlite3.connect(target)) as connection:
+        connection.executescript(SCHEMA)
+        rows = connection.execute(
+            """SELECT sport, event_id, event, generated_at, actual_winner, predicted_winner,
+                      model_probability, prediction_correct
+               FROM post_match_reviews
+               WHERE generated_at >= ?
+               ORDER BY ABS(model_probability - prediction_correct) DESC""",
+            (since,),
+        ).fetchall()
+    return [
+        {
+            "sport": sport, "event_id": event_id, "event": event, "generated_at": generated_at,
+            "actual_winner": actual_winner, "predicted_winner": predicted_winner,
+            "model_probability": model_probability, "prediction_correct": bool(prediction_correct),
+            "miss": abs(float(model_probability) - float(prediction_correct)),
+        }
+        for sport, event_id, event, generated_at, actual_winner, predicted_winner,
+            model_probability, prediction_correct in rows
+    ]
 
 
 def _list(value: Any) -> list[Any]:
@@ -185,6 +303,7 @@ def settle_pending(path: str | Path, client: PolymarketClient | None = None) -> 
     client = client or PolymarketClient(timeout=30)
     with closing(sqlite3.connect(target)) as connection:
         connection.executescript(SCHEMA)
+        _migrate_predictions(connection)
         pending = connection.execute(
             """SELECT DISTINCT p.sport, p.event_id FROM predictions p
                LEFT JOIN settlements s ON p.sport=s.sport AND p.event_id=s.event_id
@@ -196,6 +315,7 @@ def settle_pending(path: str | Path, client: PolymarketClient | None = None) -> 
                 event = client.event(str(event_id))
             except Exception:
                 errors += 1
+                logging.exception('settle_pending: unexpected error contacting Polymarket for %s', event_id)
                 continue
             winner = None
             market_payload = None
@@ -210,11 +330,40 @@ def settle_pending(path: str | Path, client: PolymarketClient | None = None) -> 
             if winner is None:
                 continue
             settled_at = str(event.get("closedTime") or event.get("endDate") or event.get("updatedAt") or "")
+            pred = connection.execute(
+                "SELECT generated_at, event, outcome, model_probability, market_probability "
+                "FROM predictions WHERE sport=? AND event_id=? AND market_started=0 LIMIT 1",
+                (sport, event_id),
+            ).fetchone()
             connection.execute(
                 "INSERT OR IGNORE INTO settlements VALUES (?, ?, ?, ?, ?, ?)",
                 (sport, event_id, winner, settled_at, "Polymarket Gamma",
                  json.dumps(market_payload, ensure_ascii=False)),
             )
+            if pred:
+                generated_at, event_name, predicted_winner, model_probability, market_probability = pred
+                review = {
+                    "sport": sport,
+                    "event_id": event_id,
+                    "event": event_name,
+                    "generated_at": generated_at,
+                    "actual_winner": winner,
+                    "predicted_winner": predicted_winner,
+                    "prediction_correct": int(predicted_winner == winner),
+                    "model_probability": model_probability,
+                    "bp_probability": market_probability,
+                    "decisive_factors": [],
+                }
+                review["narrative_summary"] = build_post_match_summary(review)
+                connection.execute(
+                    """INSERT OR IGNORE INTO post_match_reviews VALUES
+                    (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (_id(sport, event_id, generated_at, winner), sport, event_id, event_name,
+                     generated_at, winner, predicted_winner, review["prediction_correct"],
+                     model_probability, market_probability,
+                     json.dumps(review["decisive_factors"], ensure_ascii=False),
+                     json.dumps(review, ensure_ascii=False)),
+                )
             settled_count += 1
         connection.commit()
     return {"checked": len(pending), "settled": settled_count,

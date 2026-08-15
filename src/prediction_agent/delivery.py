@@ -282,11 +282,28 @@ def format_daily_report(report: dict[str, Any], report_date: date | None = None)
         if suspicious:
             lines.append(f"• 概率可疑 {suspicious} 场：模型输出处于异常区间，建议复核。")
 
+    flagged_rows = report.get("flagged") or [row for row in rows if row.get("flagged")]
+    if flagged_rows:
+        lines.extend(["", "【需人工复核】"])
+        for index, row in enumerate(flagged_rows, 1):
+            team_a, team_b = _event_team_pair(row)
+            outcome = row.get("outcome")
+            model = row.get("model_probability")
+            market = row.get("market_probability")
+            reasons = _key_reasons(row)
+            lines.extend([
+                "",
+                f"🚩 {index}. {team_a} 对 {team_b}",
+                f"预测方向：{_display_team(outcome)}",
+                f"模型胜率：{_two_sided_probability(model, outcome, team_a, team_b)}",
+                f"市场胜率：{_two_sided_probability(market, outcome, team_a, team_b)}",
+            ])
+            lines.extend(f"• {reason}" for reason in reasons)
     if not rows:
         lines.extend(["", "暂无达到策略与风控要求的机会。"])
 
     for sport in (*sport_order, None):
-        sport_rows = [row for row in rows if row.get("sport") == sport] if sport is not None else other_rows
+        sport_rows = [row for row in rows if row.get("sport") == sport and not row.get("flagged")] if sport is not None else [row for row in other_rows if not row.get("flagged")]
         if not sport_rows:
             continue
         section_name = _sport_name(sport) if sport else "其他"
@@ -326,13 +343,25 @@ def format_daily_report(report: dict[str, Any], report_date: date | None = None)
                 f"{_sport_name(sport)}：模拟利润 {float(stat.get('paper_profit', 0)):.2f} USDC｜ROI {roi_text}"
             )
         lines.append("说明：模拟盘仅用于学习与模型迭代，不涉及真实资金。")
+    risk_status = report.get("risk_status") or {}
+    max_bet = risk_status.get("max_bet_fraction", 0.0075)
+    max_daily = risk_status.get("max_daily_risk_fraction", 0.025)
+    max_event = risk_status.get("max_event_risk_fraction", 0.01)
+    max_drawdown = risk_status.get("max_drawdown_fraction", 0.10)
+    daily_committed = risk_status.get("daily_committed_fraction")
+    committed_text = f"｜今日已用 {daily_committed:.2%}" if isinstance(daily_committed, (int, float)) else ""
+    drawdown = risk_status.get("current_drawdown")
+    drawdown_text = f"｜当前回撤 {drawdown:.1%}" if isinstance(drawdown, (int, float)) else ""
     lines.extend([
         "",
         "【风控状态】",
         f"研究本金：{bankroll_text}",
-        "单次上限 0.75%｜单日上限 2.5%｜单赛事上限 1.0%｜回撤 10% 暂停",
+        f"单次上限 {max_bet:.2%}｜单日上限 {max_daily:.2%}｜单赛事上限 {max_event:.2%}｜回撤 {max_drawdown:.0%} 暂停{committed_text}{drawdown_text}",
         "仅供研究与模拟记录，不构成投资或下注建议。",
     ])
+    breaker = risk_status.get("circuit_breaker_reason")
+    if breaker:
+        lines.append(f"🚨 熔断触发：{breaker}")
     risks = report.get("risk_notes", [])
     if risks:
         lines.append("补充提示：" + "；".join(str(x) for x in risks[:2]))

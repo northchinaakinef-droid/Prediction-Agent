@@ -298,6 +298,8 @@ def evaluate_lol_meta(games: Iterable[LolDraftGame], *, validation_start: dateti
 
 
 def save_lol_meta(model: LolMetaModel, evaluation: dict, path: str | Path) -> None:
+    if "approved_for_real_money" not in evaluation or not evaluation.get("validation") or not evaluation.get("final_test"):
+        raise ValueError("refusing to write LoL-meta model without a complete evaluation record")
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps({"model": model.as_dict(), "evaluation": evaluation},
