@@ -31,6 +31,15 @@ from .schedule import (
 TAGS = {"nba": "745", "lol": "65", "cs2": "100780"}
 
 
+def _paper_trading_enabled() -> bool:
+    """Paper betting can run before real-money ROI acceptance.
+
+    This only controls the append-only paper ledger.  Real-money approval is a
+    separate, stricter ``approved_for_real_money`` flag and is never implied.
+    """
+    return os.getenv("PAPER_TRADING_ENABLED", "true").casefold() == "true"
+
+
 def _in_horizon(scheduled: datetime | None, now: datetime) -> bool:
     hours = float(os.getenv("MARKET_HORIZON_HOURS", "30"))
     return scheduled is not None and now < scheduled <= now + timedelta(hours=hours)
@@ -138,6 +147,7 @@ def analyze_sport(sport: str, model: EloModel | NbaModel, evaluation: dict, even
     risk_config = risk_config or RiskConfig()
     if ledger is None:
         ledger = RiskBudgetLedger(risk_config, bankroll)
+    paper_enabled = _paper_trading_enabled()
     rows = []
     for event in events:
         market = _main_market(event)
@@ -177,10 +187,11 @@ def analyze_sport(sport: str, model: EloModel | NbaModel, evaluation: dict, even
         risk_reasons = ledger.exhausted_reasons(event_key, group)
         rec = recommend(
             event_id=event_key, outcome=outcomes[side], model_probability=model_ps[side],
-            decimal_odds=1 / ask, bankroll=bankroll, confidence=.75 if probability_ok else .25,
+            decimal_odds=1 / ask, bankroll=bankroll,
+            confidence=.75 if (probability_ok or paper_enabled) else .25,
             spread=float(market["spread"]) if market.get("spread") is not None else None,
             available_size=float(market.get("liquidity") or 0), estimated_cost=cost,
-            trading_enabled=probability_ok and not started,
+            trading_enabled=(probability_ok or paper_enabled) and not started,
             kelly_scale=risk_config.kelly_scale, max_bet_fraction=cap,
             min_edge=risk_config.min_edge, min_confidence=risk_config.min_confidence,
             max_spread=risk_config.max_spread, min_available_size=risk_config.min_available_size,
@@ -272,6 +283,7 @@ def _research_row(sport: str, event: dict, market: dict, scheduled: datetime | N
     risk_config = risk_config or RiskConfig()
     if ledger is None:
         ledger = RiskBudgetLedger(risk_config, bankroll)
+    paper_enabled = _paper_trading_enabled()
     side = max(range(2), key=lambda index: probabilities[index] - prices[index])
     bid, best_ask = market.get("bestBid"), market.get("bestAsk")
     ask = float(best_ask) if side == 0 and best_ask is not None else (
@@ -285,10 +297,11 @@ def _research_row(sport: str, event: dict, market: dict, scheduled: datetime | N
     risk_reasons = ledger.exhausted_reasons(event_key, group)
     rec = recommend(
         event_id=event_key, outcome=outcomes[side], model_probability=probabilities[side],
-        decimal_odds=1 / ask, bankroll=bankroll, confidence=.75 if probability_ok else .25,
+        decimal_odds=1 / ask, bankroll=bankroll,
+        confidence=.75 if (probability_ok or paper_enabled) else .25,
         spread=float(market["spread"]) if market.get("spread") is not None else None,
         available_size=float(market.get("liquidity") or 0), estimated_cost=cost,
-        trading_enabled=probability_ok and not started,
+        trading_enabled=(probability_ok or paper_enabled) and not started,
         kelly_scale=risk_config.kelly_scale, max_bet_fraction=cap,
         min_edge=risk_config.min_edge, min_confidence=risk_config.min_confidence,
         max_spread=risk_config.max_spread, min_available_size=risk_config.min_available_size,
@@ -558,7 +571,12 @@ def run_all(model_dir: str | Path, output: str | Path, *, now: datetime | None =
         for row in recommendations:
             row["flagged"] = True
         flagged = list(recommendations)
-    risk_notes = ["NBA、LoL、CS2 分别训练和验收；CBA 已暂停。历史可成交赔率 ROI 验收前均保持 NO_BET。"]
+    paper_mode = "已开启" if _paper_trading_enabled() else "未开启"
+    risk_notes = [
+        "NBA、LoL、CS2 分别训练和验收；CBA 已暂停。",
+        f"虚拟投注：{paper_mode}；仅写入 paper.db，不涉及真实资金。",
+        "真实资金下注仍保持关闭。",
+    ]
     if ledger.breaker_reason:
         risk_notes.append(ledger.breaker_reason)
     report = {
