@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -81,6 +83,23 @@ class ServerDeliveryTests(unittest.TestCase):
         with patch.object(server, "_send_message") as send:
             server._send_valuable_alert(alert)
             server._send_valuable_alert(alert)
+        send.assert_called_once()
+
+    def test_next_paper_summary_run_uses_configured_time(self):
+        server = load_server_module()
+        with patch.dict(os.environ, {"PAPER_SUMMARY_TIME": "23:45"}, clear=False):
+            now = datetime(2026, 8, 15, 22, 0, tzinfo=timezone.utc)
+            target = server._next_paper_summary_run(now)
+            self.assertGreater(target, now)
+            self.assertEqual(target.minute, 45)
+
+    def test_run_paper_summary_sends_once_per_report_date(self):
+        server = load_server_module()
+        with tempfile.TemporaryDirectory() as directory:
+            paper_path = Path(directory) / "paper.db"
+            with patch.dict(os.environ, {"PAPER_DB_PATH": str(paper_path), "BANKROLL_USDC": "10000"}, clear=False),                  patch.object(server, "settle_pending", return_value={"checked": 0, "settled": 0, "pending": 0}),                  patch.object(server, "_send_message") as send:
+                server._run_paper_summary()
+                server._run_paper_summary()
         send.assert_called_once()
 
 if __name__ == "__main__":

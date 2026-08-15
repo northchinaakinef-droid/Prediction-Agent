@@ -66,6 +66,10 @@ CREATE TABLE IF NOT EXISTS settlements (
     payload_json TEXT NOT NULL,
     PRIMARY KEY (sport, event_id)
 );
+CREATE TABLE IF NOT EXISTS paper_summary_sends (
+    report_date TEXT PRIMARY KEY,
+    sent_at TEXT NOT NULL
+);
 """
 
 
@@ -144,6 +148,114 @@ def record_post_match_review(path: str | Path, review: dict[str, Any]) -> None:
              json.dumps(review, ensure_ascii=False)),
         )
         connection.commit()
+
+
+def paper_daily_summary(path: str | Path, report_date: str) -> dict[str, Any]:
+    """Return one report date's paper-betting summary instead of all-time totals."""
+    target = Path(path)
+    if not target.exists():
+        return {"report_date": report_date, "predictions": 0, "bet_candidates": 0,
+                "settled_predictions": 0, "paper_profit": 0.0, "paper_roi": None,
+                "by_sport": {}}
+    with closing(sqlite3.connect(target)) as connection:
+        connection.executescript(SCHEMA)
+        _migrate_predictions(connection)
+        rows = connection.execute(
+            """SELECT p.sport, COUNT(*), SUM(p.market_started=0),
+                      SUM(p.probability_eligible), SUM(p.action='BET')
+               FROM predictions p JOIN report_runs r ON p.run_id = r.run_id
+               WHERE r.report_date = ?
+               GROUP BY p.sport""",
+            (report_date,),
+        ).fetchall()
+        evaluated = connection.execute(
+            """SELECT p.sport, p.outcome, p.model_probability, p.action, p.stake,
+                      p.execution_price, s.winner, p.clv
+               FROM predictions p
+               JOIN report_runs r ON p.run_id = r.run_id
+               JOIN settlements s ON p.sport = s.sport AND p.event_id = s.event_id
+               WHERE r.report_date = ? AND p.market_started = 0""",
+            (report_date,),
+        ).fetchall()
+    by_sport = {str(sport): {
+        "predictions": int(count or 0),
+        "valid_forward_predictions": int(forward or 0),
+        "probability_eligible": int(eligible or 0),
+        "bet_candidates": int(bets or 0),
+        "settled_predictions": 0,
+        "model_brier": None,
+        "paper_profit": 0.0,
+        "paper_roi": None,
+    } for sport, count, forward, eligible, bets in rows}
+    grouped: dict[str, list[tuple]] = {}
+    for row in evaluated:
+        grouped.setdefault(str(row[0]), []).append(row)
+    total_profit = 0.0
+    total_turnover = 0.0
+    for sport, sport_rows in grouped.items():
+        squared, profit, turnover, clv_values = [], 0.0, 0.0, []
+        for _, outcome, probability, action, stake, execution, winner, clv in sport_rows:
+            won = outcome == winner
+            squared.append((float(probability) - float(won)) ** 2)
+            if action == "BET" and float(stake) > 0 and execution:
+                shares = float(stake) / float(execution)
+                fee = estimate_cost(float(execution), float(stake))
+                profit += shares * int(won) - float(stake) - fee
+                turnover += float(stake)
+            if clv is not None:
+                clv_values.append(float(clv))
+        by_sport.setdefault(sport, {
+            "predictions": 0, "valid_forward_predictions": 0,
+            "probability_eligible": 0, "bet_candidates": 0,
+        })
+        by_sport[sport].update({
+            "settled_predictions": len(sport_rows),
+            "model_brier": sum(squared) / len(squared),
+            "paper_profit": profit,
+            "paper_roi": profit / turnover if turnover else None,
+            "mean_clv": sum(clv_values) / len(clv_values) if clv_values else None,
+        })
+        total_profit += profit
+        total_turnover += turnover
+    total_predictions = sum(stat["predictions"] for stat in by_sport.values())
+    total_bets = sum(stat["bet_candidates"] for stat in by_sport.values())
+    total_settled = sum(stat["settled_predictions"] for stat in by_sport.values())
+    return {
+        "report_date": report_date,
+        "predictions": total_predictions,
+        "bet_candidates": total_bets,
+        "settled_predictions": total_settled,
+        "paper_profit": total_profit,
+        "paper_roi": total_profit / total_turnover if total_turnover else None,
+        "by_sport": by_sport,
+    }
+
+
+def paper_summary_sent(path: str | Path, report_date: str) -> bool:
+    target = Path(path)
+    if not target.exists():
+        return False
+    with closing(sqlite3.connect(target)) as connection:
+        connection.executescript(SCHEMA)
+        row = connection.execute(
+            "SELECT 1 FROM paper_summary_sends WHERE report_date = ?",
+            (report_date,),
+        ).fetchone()
+    return row is not None
+
+
+def mark_paper_summary_sent(path: str | Path, report_date: str, sent_at: str) -> bool:
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with closing(sqlite3.connect(target)) as connection:
+        connection.executescript(SCHEMA)
+        cursor = connection.execute(
+            """INSERT OR IGNORE INTO paper_summary_sends(report_date, sent_at)
+               VALUES (?, ?)""",
+            (report_date, sent_at),
+        )
+        connection.commit()
+    return cursor.rowcount == 1
 
 
 def summary(path: str | Path) -> dict[str, Any]:

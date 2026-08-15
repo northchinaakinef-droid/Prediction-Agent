@@ -2,9 +2,10 @@ import tempfile
 from pathlib import Path
 import unittest
 
-from prediction_agent.paper_store import (current_drawdown, paper_review_detail,
-                                          record_post_match_review, record_report,
-                                          settle_pending, summary)
+from prediction_agent.paper_store import (current_drawdown, mark_paper_summary_sent,
+                                          paper_daily_summary, paper_review_detail,
+                                          paper_summary_sent, record_post_match_review,
+                                          record_report, settle_pending, summary)
 
 
 class FakeClient:
@@ -95,6 +96,30 @@ class PaperStoreTests(unittest.TestCase):
             settle_pending(path, LosingClient())
             self.assertGreater(current_drawdown(path, 1000), 0.10)
 
+
+    def test_paper_daily_summary_and_send_marker_are_per_report_date(self):
+        report = {"generated_at": "2026-01-01T00:00:00+00:00", "report_date": "2026-01-01",
+                  "recommendations": [{"generated_at": "2026-01-01T00:00:00+00:00",
+                    "sport": "nba", "event_id": "1", "outcome": "A", "model_probability": .6,
+                    "market_probability": .55, "execution_price": .5, "action": "BET",
+                    "stake": 100, "probability_eligible": True, "real_money_approved": False,
+                    "market_started": False}]}
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "paper.db"
+            record_report(path, report)
+            settle_pending(path, FakeClient())
+            daily = paper_daily_summary(path, "2026-01-01")
+        self.assertEqual(daily["predictions"], 1)
+        self.assertEqual(daily["bet_candidates"], 1)
+        self.assertEqual(daily["settled_predictions"], 1)
+        self.assertIsInstance(daily["paper_profit"], float)
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "paper.db"
+            self.assertFalse(paper_summary_sent(path, "2026-01-01"))
+            self.assertTrue(mark_paper_summary_sent(path, "2026-01-01", "2026-01-01T12:00:00+00:00"))
+            self.assertTrue(paper_summary_sent(path, "2026-01-01"))
+            self.assertFalse(mark_paper_summary_sent(path, "2026-01-01", "2026-01-01T12:00:00+00:00"))
 
 if __name__ == "__main__":
     unittest.main()
