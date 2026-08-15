@@ -11,6 +11,7 @@ from typing import Any
 
 from .providers.polymarket import PolymarketClient
 from .costs import estimate_cost
+from .narrative import build_post_match_summary
 
 
 SCHEMA = """
@@ -256,7 +257,7 @@ def record_closing_line(path: str | Path, sport: str, event_id: str, closing_pri
         connection.execute(
             """UPDATE predictions
                SET closing_price = ?,
-                   clv = CASE WHEN execution_price IS NOT NULL THEN execution_price - ? ELSE NULL END
+                   clv = CASE WHEN execution_price IS NOT NULL THEN ? - execution_price ELSE NULL END
                WHERE sport = ? AND event_id = ?""",
             (float(closing_price), float(closing_price), sport, event_id),
         )
@@ -353,6 +354,7 @@ def settle_pending(path: str | Path, client: PolymarketClient | None = None) -> 
                     "bp_probability": market_probability,
                     "decisive_factors": [],
                 }
+                review["narrative_summary"] = build_post_match_summary(review)
                 connection.execute(
                     """INSERT OR IGNORE INTO post_match_reviews VALUES
                     (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",

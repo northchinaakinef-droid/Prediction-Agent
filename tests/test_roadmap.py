@@ -4,9 +4,11 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
+from prediction_agent.cs2_model import Cs2Model, save_cs2
+from prediction_agent.lol_meta_model import LolMetaModel, save_lol_meta
 from prediction_agent.nba_model import NbaModel, save_nba
 from prediction_agent.lol_model import EloModel, save_model
-from prediction_agent.narrative import build_pre_match_summary
+from prediction_agent.narrative import build_post_match_summary, build_pre_match_summary
 from prediction_agent.next_model import (
     AnalystPick, InjuryRecord, analyst_consensus_diff, injury_impact_diff,
 )
@@ -61,6 +63,16 @@ class NarrativeTests(unittest.TestCase):
         self.assertIsInstance(text, str)
         self.assertEqual(row, before)
 
+    def test_post_match_narrative_is_read_only(self):
+        row = {
+            "event": "A vs B", "actual_winner": "B", "predicted_winner": "A",
+            "prediction_correct": False, "model_probability": 0.8,
+        }
+        before = deepcopy(row)
+        text = build_post_match_summary(row)
+        self.assertIsInstance(text, str)
+        self.assertEqual(row, before)
+
 
 class FlagRowTests(unittest.TestCase):
     def test_large_disagreement_lands_in_flagged_bucket(self):
@@ -84,7 +96,7 @@ class PaperStoreRoadmapTests(unittest.TestCase):
             settle_pending(path, FakeClient())
             self.assertIsNone(summary(path)["by_sport"]["nba"].get("mean_clv"))
             record_closing_line(path, "nba", "1", 0.52)
-            self.assertAlmostEqual(summary(path)["by_sport"]["nba"]["mean_clv"], -0.02)
+            self.assertAlmostEqual(summary(path)["by_sport"]["nba"]["mean_clv"], 0.02)
 
     def test_settle_pending_populates_post_match_reviews_and_review_sorts_biggest_miss_first(self):
         rows = [
@@ -110,17 +122,63 @@ class PaperStoreRoadmapTests(unittest.TestCase):
 
 
 class SaveGuardTests(unittest.TestCase):
+    def _valid_nba_eval(self):
+        return {"approved_for_real_money": False, "validation": {"samples": 1}, "retrospective_test": {"samples": 1}}
+
+    def _valid_lol_eval(self):
+        return {"approved_for_real_money": False, "validation": {"samples": 1}}
+
+    def _valid_meta_eval(self):
+        return {"approved_for_real_money": False, "validation": {"samples": 1}, "final_test": {"samples": 1}}
     def test_save_nba_requires_complete_evaluation(self):
         model = NbaModel({}, {}, {}, "2026-01-01", 1)
         with TemporaryDirectory() as directory:
             with self.assertRaisesRegex(ValueError, "complete evaluation"):
                 save_nba(model, {"approved_for_real_money": False}, Path(directory) / "model.json")
 
+    def test_save_nba_accepts_complete_evaluation(self):
+        model = NbaModel({}, {}, {}, "2026-01-01", 1)
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "model.json"
+            save_nba(model, self._valid_nba_eval(), path)
+            self.assertTrue(path.exists())
+
     def test_save_model_requires_complete_evaluation(self):
         model = EloModel({}, {}, "2026-01-01", 1)
         with TemporaryDirectory() as directory:
             with self.assertRaisesRegex(ValueError, "complete evaluation"):
                 save_model(model, Path(directory) / "model.json", {"approved_for_real_money": False})
+
+    def test_save_model_accepts_complete_evaluation(self):
+        model = EloModel({}, {}, "2026-01-01", 1)
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "model.json"
+            save_model(model, path, self._valid_lol_eval())
+            self.assertTrue(path.exists())
+
+    def test_save_cs2_requires_complete_evaluation(self):
+        model = Cs2Model({}, {}, {}, {}, {}, {}, "2026-01-01", 0)
+        with TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(ValueError, "complete evaluation"):
+                save_cs2(model, {"approved_for_real_money": False}, Path(directory) / "model.json")
+
+    def test_save_cs2_accepts_complete_evaluation(self):
+        model = Cs2Model({}, {}, {}, {}, {}, {}, "2026-01-01", 0)
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "model.json"
+            save_cs2(model, self._valid_meta_eval(), path)
+            self.assertTrue(path.exists())
+
+    def test_save_lol_meta_requires_complete_evaluation(self):
+        with TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(ValueError, "complete evaluation"):
+                save_lol_meta(LolMetaModel(), {"approved_for_real_money": False}, Path(directory) / "model.json")
+
+    def test_save_lol_meta_accepts_complete_evaluation(self):
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "model.json"
+            save_lol_meta(LolMetaModel(), self._valid_meta_eval(), path)
+            self.assertTrue(path.exists())
 
 
 if __name__ == "__main__":
