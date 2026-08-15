@@ -12,6 +12,8 @@ if [[ ! -f "$app_dir/.env" ]]; then
   echo "Production .env is missing: $app_dir/.env" >&2
   exit 1
 fi
+chown 10001:10001 "$app_dir/.env"
+chmod 600 "$app_dir/.env"
 
 release_dir="$(mktemp -d /tmp/prediction-agent-release.XXXXXX)"
 cleanup() {
