@@ -64,5 +64,24 @@ class ServerDeliveryTests(unittest.TestCase):
         self.assertFalse(server._health_ready())
 
 
+    def test_live_push_dedupes_repeated_alert_keys(self):
+        server = load_server_module()
+        server._SENT_LIVE_ALERT_KEYS.clear()
+        alert = {
+            "category": "PREMATCH_ANALYSIS", "severity": "IMPORTANT", "alert_score": 55,
+            "sport": "lol", "title": "BLG vs WE", "summary": "赛前方向：BLG",
+            "reasons": [], "dedupe_key": "lol:we:blg:PREMATCH_ANALYSIS",
+            "details": {
+                "outcome": "BLG", "team_a": "BLG", "team_b": "WE",
+                "blue_win_probability": .63, "red_win_probability": .37,
+                "blue_market_probability": .58, "red_market_probability": .42,
+                "reasons": ["队伍底蕴优势"], "analyst_count": 2,
+            },
+        }
+        with patch.object(server, "_send_message") as send:
+            server._send_valuable_alert(alert)
+            server._send_valuable_alert(alert)
+        send.assert_called_once()
+
 if __name__ == "__main__":
     unittest.main()
