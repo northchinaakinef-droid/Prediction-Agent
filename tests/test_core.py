@@ -120,6 +120,8 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(_event_name("Ninjas in Pyjamas 对 LNG Esports"),
                          "Ninjas in Pyjamas 对 LNG Esports")
         self.assertEqual(_display_team("Ninjas in Pyjamas.CN"), "Ninjas in Pyjamas")
+        self.assertEqual(_display_team("Team WE (BO3) - LPL Group Ascend"), "Team WE")
+        self.assertEqual(_display_team("⁣Hooligans"), "Hooligans")
 
     def test_live_alert_text_is_clear(self):
         text = format_live_alert({

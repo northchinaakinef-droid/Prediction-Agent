@@ -137,8 +137,10 @@ def _sport_name(value: Any) -> str:
 
 
 def _display_team(value: Any) -> str:
-    """Clean provider team labels like `Ninjas in Pyjamas.CN` for display only."""
+    """Clean provider team labels for display only."""
     text = str(value or "").strip()
+    text = re.sub(r"[\u200b-\u200f\u202a-\u202e\u2060-\u2064\ufeff]", "", text)
+    text = re.sub(r"\s*\(BO\d+\)\s*-\s*.*$", "", text)
     text = re.sub(r"\.(CN|EU|KR|NA|TW|VN|JP|OCE|BR|TR|CIS|MENA|LATAM|SEA|AM|US|UK|AU)\b.*$", "", text)
     return " ".join(text.split()) or str(value or "未知队伍")
 
@@ -203,6 +205,26 @@ def _zh_live_text(value: Any) -> str:
     return text.replace("unavailable", "暂无数据")
 
 
+def _event_team_pair(row: dict[str, Any]) -> tuple[str, str]:
+    event_text = _event_name(row.get("event", row.get("event_id", "未知赛事")))
+    parts = re.split(r"\s+对\s+", event_text, maxsplit=1)
+    if len(parts) == 2:
+        return parts[0].strip(), parts[1].strip()
+    return event_text, "另一方"
+
+
+def _two_sided_probability(model: Any, outcome: Any, team_a: str, team_b: str) -> str:
+    if model is None:
+        return "不可比较"
+    model = float(model)
+    outcome = _display_team(outcome)
+    if outcome and outcome == team_a:
+        return f"{team_a} {model:.1%}｜{team_b} {1 - model:.1%}"
+    if outcome and outcome == team_b:
+        return f"{team_a} {1 - model:.1%}｜{team_b} {model:.1%}"
+    return f"{outcome or '未知方向'} {model:.1%}"
+
+
 def format_daily_report(report: dict[str, Any], report_date: date | None = None) -> str:
     def percent(value: Any) -> str:
         return "不可比较" if value is None else f"{float(value):.1%}"
@@ -213,54 +235,81 @@ def format_daily_report(report: dict[str, Any], report_date: date | None = None)
     day = report_date or (date.fromisoformat(report["report_date"]) if report.get("report_date") else date.today())
     rows = sorted(report.get("recommendations", []), key=lambda row: row.get("action") != "BET")
     opportunities = sum(row.get("action") == "BET" for row in rows)
+    lines = [f"每日赛事研究｜{day.isoformat()}", "", "【今日总览】"]
+    sport_order = ("nba", "lol", "cs2")
+    statuses = report.get("sport_status", {})
+    for sport in sport_order:
+        sport_rows = [row for row in rows if row.get("sport") == sport]
+        bets = sum(row.get("action") == "BET" for row in sport_rows)
+        status = statuses.get(sport, {})
+        ready = status.get("ready", True)
+        today_markets = status.get("today_markets")
+        suffix = f"｜今日市场 {today_markets} 场" if today_markets is not None else ""
+        lines.append(f"{'✅' if ready else '⚠️'} {_sport_name(sport)}：分析 {len(sport_rows)} 场｜符合策略 {bets} 场{suffix}")
+    other_rows = [row for row in rows if row.get("sport") not in sport_order]
+    if other_rows:
+        bets = sum(row.get("action") == "BET" for row in other_rows)
+        lines.append(f"其他：分析 {len(other_rows)} 场｜符合策略 {bets} 场")
+    lines.append(f"合计：分析 {len(rows)} 场｜符合策略 {opportunities} 场")
+
     coverage = report.get("schedule_coverage", {})
-    expected = sum(value.get("expected", 0) for value in coverage.values())
-    watching = sum(value.get("watching", 0) for value in coverage.values())
-    incomplete = bool(report.get("data_incomplete"))
-    lines = [
-        f"每日赛事研究｜{day.isoformat()}",
-        "【赛事覆盖】",
-        *(f"{'✅' if float(value.get('coverage', 0)) >= 1 else '⚠️'} {_sport_name(sport)}　"
-          f"预计 {value.get('expected', 0)}｜发现 {value.get('discovered', 0)}｜"
-          f"市场 {value.get('market_matched', 0)}｜监控 {value.get('watching', 0)}"
-          for sport, value in coverage.items()),
-        f"合计　预计 {expected}｜已发现 {sum(value.get('discovered', 0) for value in coverage.values())}｜监控 {watching}",
-        *( ["🚨 数据不完整：存在未解释的赛事遗漏"] if incomplete else ["✅ 今日目标赛事已全部覆盖"] ),
-        "",
-    ]
-    for sport, value in coverage.items():
-        if value.get("source_disagreement_warning"):
-            lines.append(f"⚠️ {_sport_name(sport)}：多个赛程源结果不一致，请查看赛程审计。")
-        elif value.get("source_unavailable_warning"):
-            lines.append(f"⚠️ {_sport_name(sport)}：部分赛程源不可用，请查看赛程审计。")
-        for missing in value.get("missing", []):
-            lines.append(
-                f"• 遗漏：{missing.get('league')}｜{missing.get('team_a')} 对 {missing.get('team_b')}｜"
-                f"阶段：{missing.get('missing_stage') or missing.get('watcher_status') or '未知'}｜"
-                f"原因：{missing.get('missing_reason') or '监控器不可用'}"
-            )
+    if coverage:
+        expected = sum(value.get("expected", 0) for value in coverage.values())
+        watching = sum(value.get("watching", 0) for value in coverage.values())
+        lines.extend(["", "【赛程覆盖】"])
+        lines.extend(
+            f"{'✅' if float(value.get('coverage', 0)) >= 1 else '⚠️'} {_sport_name(sport)}　"
+            f"预计 {value.get('expected', 0)}｜发现 {value.get('discovered', 0)}｜"
+            f"市场 {value.get('market_matched', 0)}｜监控 {value.get('watching', 0)}"
+            for sport, value in coverage.items()
+        )
+        lines.append(f"合计：预计 {expected} 场｜监控 {watching} 场")
+        if report.get("data_incomplete"):
+            lines.append("🚨 数据不完整：存在未解释的赛事遗漏")
+        for sport, value in coverage.items():
+            if value.get("source_disagreement_warning"):
+                lines.append(f"⚠️ {_sport_name(sport)}：多个赛程源结果不一致，请查看赛程审计。")
+            elif value.get("source_unavailable_warning"):
+                lines.append(f"⚠️ {_sport_name(sport)}：部分赛程源不可用，请查看赛程审计。")
+
     schedule_matched = sum(bool(row.get("schedule_matched")) for row in rows)
     market_only = len(rows) - schedule_matched
     suspicious = sum(not bool(row.get("probability_plausible", True)) for row in rows)
-    lines.extend(["", "【研究结论】", f"分析 {len(rows)} 场｜符合策略 {opportunities} 场｜其余仅观察"])
-    lines.append(f"赛程匹配 {schedule_matched} 场｜市场独有 {market_only} 场"
-                 f"{'｜概率可疑 ' + str(suspicious) + ' 场' if suspicious else ''}")
-    if market_only:
-        lines.append("• 市场独有：该赛事仅在 Polymarket 出现，未在赛程源确认，可能存在映射或队名不一致。")
+    if market_only or suspicious:
+        lines.extend(["", "【数据提示】"])
+        if market_only:
+            lines.append(f"• 市场独有 {market_only} 场：仅 Polymarket 出现，未在赛程源确认，可能存在映射或队名不一致。")
+        if suspicious:
+            lines.append(f"• 概率可疑 {suspicious} 场：模型输出处于异常区间，建议复核。")
+
     if not rows:
-        lines.append("暂无达到策略与风控要求的机会。")
-    for index, row in enumerate(rows, 1):
-        is_bet = row.get("action") == "BET"
-        action = "暂不参与" if not is_bet else "符合策略"
-        marker = "⭐" if is_bet else "▫️"
-        reasons = _key_reasons(row)
-        lines.extend([
-            "",
-            f"{marker} {index}. {_sport_name(row.get('sport'))}｜{_event_name(row.get('event', row.get('event_id', '未知赛事')))}",
-            f"结论：{action}｜研究方向：{row.get('outcome', '-')}｜可买价：{price(row.get('execution_price'))}",
-            f"模型胜率 {percent(row.get('model_probability'))}｜市场胜率 {percent(row.get('market_probability'))}｜净优势 {percent(row.get('edge'))}｜净期望值 {percent(row.get('expected_value'))}",
-            *(f"• {reason}" for reason in reasons),
-        ])
+        lines.extend(["", "暂无达到策略与风控要求的机会。"])
+
+    for sport in (*sport_order, None):
+        sport_rows = [row for row in rows if row.get("sport") == sport] if sport is not None else other_rows
+        if not sport_rows:
+            continue
+        section_name = _sport_name(sport) if sport else "其他"
+        lines.extend(["", f"【{section_name}】"])
+        for index, row in enumerate(sport_rows, 1):
+            is_bet = row.get("action") == "BET"
+            action = "符合策略" if is_bet else "暂不参与"
+            marker = "⭐" if is_bet else "▫️"
+            team_a, team_b = _event_team_pair(row)
+            outcome = row.get("outcome")
+            model = row.get("model_probability")
+            market = row.get("market_probability")
+            reasons = _key_reasons(row)
+            lines.extend([
+                "",
+                f"{marker} {index}. {team_a} 对 {team_b}",
+                f"结论：{action}｜预测方向：{_display_team(outcome)}",
+                f"模型胜率：{_two_sided_probability(model, outcome, team_a, team_b)}",
+                f"市场胜率：{_two_sided_probability(market, outcome, team_a, team_b)}",
+                f"净优势：{percent(row.get('edge'))}｜净期望值：{percent(row.get('expected_value'))}｜可买价：{price(row.get('execution_price'))}",
+                *(f"• {reason}" for reason in reasons),
+            ])
+
     bankroll = report.get("bankroll_usdc")
     bankroll_text = f"{float(bankroll):.2f} USDC" if bankroll is not None else "等待当日汇率"
     lines.extend([
