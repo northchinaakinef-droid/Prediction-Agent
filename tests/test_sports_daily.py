@@ -1,10 +1,18 @@
 from datetime import datetime, timedelta, timezone
 import unittest
 
-from prediction_agent.sports_daily import _find_schedule_match, _probability_sanity, _research_row
+from prediction_agent.sports_daily import _find_schedule_match, _is_major_lol_event, _probability_sanity, _research_row
 
 
 class SportsDailyTests(unittest.TestCase):
+    def test_lol_major_event_filter(self):
+        self.assertTrue(_is_major_lol_event("LPL Group Ascend"))
+        self.assertTrue(_is_major_lol_event("LCK 2026"))
+        self.assertTrue(_is_major_lol_event("EWC 2026"))
+        self.assertTrue(_is_major_lol_event("Esports World Cup 2026"))
+        self.assertTrue(_is_major_lol_event("Worlds 2026"))
+        self.assertFalse(_is_major_lol_event("EBL Regular Season"))
+        self.assertFalse(_is_major_lol_event("Ultraliga"))
     def test_started_market_does_not_display_edge_or_ev(self):
         now = datetime(2026, 1, 1, 12, tzinfo=timezone.utc)
         row = _research_row(

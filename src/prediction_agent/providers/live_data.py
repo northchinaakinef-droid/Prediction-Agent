@@ -332,7 +332,7 @@ class LeaguepediaDraftProvider:
             "where": f"SG.DateTime_UTC >= '{since}'", "order_by": "SG.DateTime_UTC DESC",
         }, headers={"User-Agent": "PredictionAgent/0.2"})
         targets = tuple(value.strip().casefold() for value in os.getenv(
-            "LOL_TARGET_LEAGUES", "LPL,LCK,LEC,LCS,LTA,LCP,MSI,Worlds,First Stand"
+            "LOL_TARGET_LEAGUES", "LPL,LCK,LEC,LCS,LTA,LCP,MSI,Worlds,First Stand,EWC,Esports World Cup"
         ).split(",") if value.strip())
         rows = []
         for result in payload.get("cargoquery", []):

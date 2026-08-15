@@ -39,6 +39,17 @@ def _timing(scheduled: datetime, now: datetime) -> tuple[float, str]:
     return hours, f"T-{target}h"
 
 
+LOL_MAJOR_EVENT_KEYWORDS = (
+    "lpl", "lck", "lec", "lcs", "lta", "lcp", "msi", "worlds",
+    "world championship", "first stand", "ewc", "esports world cup",
+)
+
+
+def _is_major_lol_event(title: object) -> bool:
+    lowered = str(title or "").casefold()
+    return any(keyword in lowered for keyword in LOL_MAJOR_EVENT_KEYWORDS)
+
+
 def _field(value):
     return json.loads(value) if isinstance(value, str) else list(value or [])
 
@@ -293,6 +304,8 @@ def analyze_lol_meta(model: LolMetaModel, evaluation: dict, events: list[dict], 
                      schedule_matches: list[dict] | None = None) -> list[dict]:
     rows = []
     for event, market, scheduled, outcomes, prices in _market_rows(events, now):
+        if not _is_major_lol_event(event.get("title")):
+            continue
         a, b = canonical_team("lol", outcomes[0]), canonical_team("lol", outcomes[1])
         roster_a = tuple(model.latest_team_rosters.get(a, ()))
         roster_b = tuple(model.latest_team_rosters.get(b, ()))

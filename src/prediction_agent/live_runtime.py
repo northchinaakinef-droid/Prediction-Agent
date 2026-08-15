@@ -360,7 +360,7 @@ class LiveSupervisor:
         def riot_states():
             configured = [value.strip() for value in os.getenv("LOLESPORTS_LEAGUE_IDS", "").split(",") if value.strip()]
             target_names = [value.strip() for value in os.getenv(
-                "LOL_TARGET_LEAGUES", "LPL,LCK,LEC,LCS,LTA,LCP,MSI,Worlds,First Stand"
+                "LOL_TARGET_LEAGUES", "LPL,LCK,LEC,LCS,LTA,LCP,MSI,Worlds,First Stand,EWC,Esports World Cup"
             ).split(",") if value.strip()]
             league_ids = configured or riot.league_ids(target_names)
             if not league_ids:
