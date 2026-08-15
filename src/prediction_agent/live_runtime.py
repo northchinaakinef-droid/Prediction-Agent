@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable
@@ -10,10 +11,11 @@ from zoneinfo import ZoneInfo
 
 from .entities import canonical_team, normalized_name
 from .live_engine import LiveAlert, LiveAnalysisEngine, LiveStore, match_key
+from . import nba_analytics
 from .providers.live_data import (
     Bo3Cs2Provider, DataSourceUnavailable, EspnNbaProvider, GridOpenAccessProvider,
-    LeaguepediaDraftProvider, NbaOfficialProvider, PandaScoreProvider, RiotEsportsProvider,
-    TheSportsDbNbaProvider,
+    LeaguepediaDraftProvider, NbaBoxscoreProvider, NbaOfficialProvider, PandaScoreProvider,
+    RiotEsportsProvider, TheSportsDbNbaProvider,
 )
 from .providers.polymarket import PolymarketClient
 from .providers.news import RssNewsProvider
@@ -211,21 +213,297 @@ class LiveSupervisor:
                 rows.append((abs(diff), f"{label} {diff:+.0f}（{side}占优）"))
             factors = [text for _, text in sorted(rows, reverse=True)[:3]]
         elif state.sport == "nba":
-            if state.score_a is not None and state.score_b is not None:
+            explicit = list(features.get("nba_decisive_factors") or [])
+            if explicit:
+                factors = explicit[:5]
+            elif state.score_a is not None and state.score_b is not None:
                 diff = float(state.score_a) - float(state.score_b)
                 side = "A队" if diff > 0 else "B队"
                 factors.append(f"最终分差 {diff:+.0f}（{side}占优）")
         return factors
 
+    @staticmethod
+    def _is_finished_state(state) -> bool:
+        return state.finished or str(state.status).casefold() in {
+            "finished", "completed", "post", "final"
+        }
+
+    @staticmethod
+    def _nba_game_id_for_state(state, official_by_teams: dict) -> str | None:
+        if state.source == "nba_official" and re.fullmatch(r"\d{10}", str(state.source_id or "")):
+            return str(state.source_id)
+        key = tuple(sorted((
+            normalized_name(canonical_team("nba", state.team_a)),
+            normalized_name(canonical_team("nba", state.team_b)),
+        )))
+        official = official_by_teams.get(key)
+        if official and re.fullmatch(r"\d{10}", str(official.source_id or "")):
+            return str(official.source_id)
+        return None
+
+    def _nba_game_details(self, states: list) -> dict[str, list[dict]]:
+        """Fetch NBA.com box scores for every finished NBA state."""
+        finished_states = [state for state in states
+                           if state.sport == "nba" and self._is_finished_state(state)]
+        if not finished_states:
+            return {}
+        official = self._attempt("nba_official_boxscore_lookup", lambda: NbaOfficialProvider().live())
+        official_by_teams: dict = {}
+        for official_state in official:
+            key = tuple(sorted((
+                normalized_name(canonical_team("nba", official_state.team_a)),
+                normalized_name(canonical_team("nba", official_state.team_b)),
+            )))
+            official_by_teams.setdefault(key, official_state)
+        details: dict[str, list[dict]] = {}
+        provider = NbaBoxscoreProvider()
+        for state in finished_states:
+            game_id = self._nba_game_id_for_state(state, official_by_teams)
+            if not game_id:
+                continue
+            name = f"nba_boxscore_{game_id}"
+            try:
+                box = provider.boxscore(game_id)
+                available = box is not None
+                self.source_status[name] = {
+                    "available": available, "rows": 1 if available else 0,
+                    "error": None, "checked_at": datetime.now(timezone.utc).isoformat(),
+                }
+                if box:
+                    details.setdefault(match_key(state), []).append(box)
+            except Exception as error:
+                logging.exception("live_runtime nba boxscore %s failed", game_id)
+                self.source_status[name] = {
+                    "available": False, "rows": 0, "error": repr(error),
+                    "checked_at": datetime.now(timezone.utc).isoformat(),
+                }
+        return details
+
+    def _compute_nba_box_samples(self, state, game_details: dict[str, list[dict]]) -> list[dict]:
+        boxes = (game_details or {}).get(match_key(state), [])
+        samples: list[dict] = []
+        for index, box in enumerate(boxes, 1):
+            metrics = nba_analytics.boxscore_metrics(box)
+            samples.append({
+                "game_index": index,
+                "game_id": box.get("game_id") or state.source_id,
+                "game_time": str(box.get("game_time_utc") or state.observed_at.isoformat()),
+                "away_team": state.team_a,
+                "home_team": state.team_b,
+                "away_score": box.get("away_team", {}).get("score"),
+                "home_score": box.get("home_team", {}).get("score"),
+                "winner_side": self._winner_side(state),
+                "period": box.get("period"),
+                "game_status_text": box.get("game_status_text"),
+                "duration": box.get("duration"),
+                "duration_seconds": box.get("duration_seconds"),
+                "arena": box.get("arena"),
+                "officials": box.get("officials"),
+                "away_team_boxscore": box.get("away_team"),
+                "home_team_boxscore": box.get("home_team"),
+                "metrics": metrics,
+                "decisive_factors": nba_analytics.decisive_factors(box),
+            })
+        return samples
+
+    @staticmethod
+    def _nba_num(value) -> str:
+        if value is None:
+            return "—"
+        try:
+            return f"{float(value):.0f}"
+        except (TypeError, ValueError):
+            return str(value)
+
+    @staticmethod
+    def _nba_player_lines(team_name: str, box_team: dict, limit: int = 8) -> list[str]:
+        players = sorted((box_team.get("players") or []),
+                         key=lambda row: float(row.get("points") or 0), reverse=True)[:limit]
+        lines = []
+        for player in players:
+            name = str(player.get("name") or "未知")
+            starter = "首发" if player.get("starter") else "替补"
+            minutes = player.get("minutes") or ""
+            points = LiveSupervisor._nba_num(player.get("points"))
+            rebounds = LiveSupervisor._nba_num(player.get("rebounds_total"))
+            assists = LiveSupervisor._nba_num(player.get("assists"))
+            plus_minus = player.get("plus_minus_points")
+            plus_minus_text = f"正负值 {float(plus_minus):+.0f}" if plus_minus is not None else ""
+            parts = [f"{name}({starter})", minutes, f"{points}分 {rebounds}板 {assists}助", plus_minus_text]
+            lines.append(" ".join(part for part in parts if part))
+        return lines
+
+    def _nba_strategy_readout(self, sample: dict) -> str:
+        metrics = sample.get("metrics") or {}
+        home_box = sample.get("home_team_boxscore") or {}
+        away_box = sample.get("away_team_boxscore") or {}
+        home_stats = home_box.get("statistics") or {}
+        away_stats = away_box.get("statistics") or {}
+        pace = float(metrics.get("pace") or 0)
+        home_paint = float(home_stats.get("pointsInThePaint") or 0)
+        away_paint = float(away_stats.get("pointsInThePaint") or 0)
+        home_fast = float(home_stats.get("pointsFastBreak") or 0)
+        away_fast = float(away_stats.get("pointsFastBreak") or 0)
+        home_bench = float(home_stats.get("benchPoints") or 0)
+        away_bench = float(away_stats.get("benchPoints") or 0)
+        home_to = float(home_stats.get("turnoversTotal") or home_stats.get("turnovers") or 0)
+        away_to = float(away_stats.get("turnoversTotal") or away_stats.get("turnovers") or 0)
+        parts = []
+        if pace >= 103:
+            parts.append("节奏偏快，更多回合和转换进攻")
+        elif pace <= 96:
+            parts.append("节奏偏慢，半场阵地战权重更高")
+        else:
+            parts.append("节奏处于中游，攻守转换与半场阵地相对均衡")
+        if home_paint > away_paint + 8:
+            parts.append(f"{sample.get('home_team')} 内线终结优势明显")
+        elif away_paint > home_paint + 8:
+            parts.append(f"{sample.get('away_team')} 内线终结优势明显")
+        if home_fast > away_fast + 8:
+            parts.append(f"{sample.get('home_team')} 快攻转换更高效")
+        elif away_fast > home_fast + 8:
+            parts.append(f"{sample.get('away_team')} 快攻转换更高效")
+        if home_bench > away_bench + 8:
+            parts.append(f"{sample.get('home_team')} 替补深度占优")
+        elif away_bench > home_bench + 8:
+            parts.append(f"{sample.get('away_team')} 替补深度占优")
+        if home_to > away_to + 4:
+            parts.append(f"{sample.get('home_team')} 失误偏多，球权管理更差")
+        elif away_to > home_to + 4:
+            parts.append(f"{sample.get('away_team')} 失误偏多，球权管理更差")
+        return "；".join(parts) + "。"
+
+    def _build_nba_review_analysis(self, state, game_samples: list[dict],
+                                   analyst_notes: dict[str, list]) -> str:
+        """Return a structured, analyst-grade NBA post-game review."""
+        lines = [f"{state.team_a} vs {state.team_b} NBA 赛后复盘。"]
+        actual_side = self._winner_side(state)
+        actual_team = state.team_a if actual_side == "a" else state.team_b if actual_side == "b" else None
+        if actual_team:
+            lines.append(f"实际胜者：{actual_team}。")
+        if state.score_a is not None and state.score_b is not None:
+            lines.append(f"最终比分：{state.team_a} {state.score_a:.0f} - {state.score_b:.0f} {state.team_b}。")
+        prematch_side = self._prematch_side(state)
+        if prematch_side is not None:
+            prematch_team = state.team_a if prematch_side == "a" else state.team_b
+            result = "正确" if prematch_side == actual_side else "错误"
+            lines.append(f"赛前预测：{prematch_team}；判断{result}。")
+        else:
+            lines.append("赛前预测：未生成有效概率，跳过赛前维度。")
+
+        sample = game_samples[0] if game_samples else {}
+        if sample:
+            home_team = sample.get("home_team")
+            away_team = sample.get("away_team")
+            home_box = sample.get("home_team_boxscore") or {}
+            away_box = sample.get("away_team_boxscore") or {}
+            metrics = sample.get("metrics") or {}
+            home_factors = metrics.get("home_four_factors") or {}
+            away_factors = metrics.get("away_four_factors") or {}
+            home_ratings = metrics.get("home_ratings") or {}
+            away_ratings = metrics.get("away_ratings") or {}
+
+            lines.append("")
+            lines.append("【四要素效率】")
+            lines.append(
+                f"{away_team}：有效命中率 {float(away_factors.get('effective_field_goal_pct') or 0):.1%}，"
+                f"失误率 {float(away_factors.get('turnover_pct') or 0):.1%}，"
+                f"进攻篮板率 {float(away_factors.get('offensive_rebound_pct') or 0):.1%}，"
+                f"罚球率 {float(away_factors.get('free_throw_rate') or 0):.2f}。"
+            )
+            lines.append(
+                f"{home_team}：有效命中率 {float(home_factors.get('effective_field_goal_pct') or 0):.1%}，"
+                f"失误率 {float(home_factors.get('turnover_pct') or 0):.1%}，"
+                f"进攻篮板率 {float(home_factors.get('offensive_rebound_pct') or 0):.1%}，"
+                f"罚球率 {float(home_factors.get('free_throw_rate') or 0):.2f}。"
+            )
+            lines.append("")
+            lines.append("【节奏与效率】")
+            lines.append(f"回合数约 {float(metrics.get('possessions') or 0):.1f}，Pace {float(metrics.get('pace') or 0):.1f}。")
+            lines.append(
+                f"{away_team} 进攻效率 {float(away_ratings.get('offensive_rating') or 0):.1f}，"
+                f"防守效率 {float(away_ratings.get('defensive_rating') or 0):.1f}，"
+                f"净效率 {float(away_ratings.get('net_rating') or 0):+.1f}。"
+            )
+            lines.append(
+                f"{home_team} 进攻效率 {float(home_ratings.get('offensive_rating') or 0):.1f}，"
+                f"防守效率 {float(home_ratings.get('defensive_rating') or 0):.1f}，"
+                f"净效率 {float(home_ratings.get('net_rating') or 0):+.1f}。"
+            )
+            lines.append("")
+            lines.append("【比赛走势】")
+            away_periods = away_box.get("periods") or []
+            home_periods = home_box.get("periods") or []
+            if away_periods or home_periods:
+                for i in range(max(len(away_periods), len(home_periods))):
+                    a_score = away_periods[i].get("score") if i < len(away_periods) else "—"
+                    h_score = home_periods[i].get("score") if i < len(home_periods) else "—"
+                    lines.append(f"第{i + 1}节：{away_team} {a_score} - {h_score} {home_team}。")
+            home_stats = home_box.get("statistics") or {}
+            away_stats = away_box.get("statistics") or {}
+            if home_stats.get("leadChanges") is not None:
+                lines.append(
+                    f"领先交替 {home_stats.get('leadChanges')} 次，平局 {home_stats.get('timesTied')} 次，"
+                    f"主队最大领先 {home_stats.get('biggestLead')}，客队最大领先 {away_stats.get('biggestLead')}。"
+                )
+            lines.append("")
+            lines.append("【得分构成与球权细节】")
+            for label, key in (
+                ("内线得分", "pointsInThePaint"),
+                ("快攻得分", "pointsFastBreak"),
+                ("二次进攻得分", "pointsSecondChance"),
+                ("利用失误得分", "pointsFromTurnovers"),
+                ("替补得分", "benchPoints"),
+                ("篮板总数", "reboundsTotal"),
+                ("助攻", "assists"),
+                ("抢断", "steals"),
+                ("封盖", "blocks"),
+                ("失误", "turnoversTotal"),
+            ):
+                away_value = away_stats.get(key)
+                home_value = home_stats.get(key)
+                if away_value is None and home_value is None:
+                    continue
+                lines.append(f"{label}：{away_team} {self._nba_num(away_value)} - {self._nba_num(home_value)} {home_team}。")
+            lines.append("")
+            lines.append("【球员表现】")
+            away_lines = self._nba_player_lines(away_team, away_box)
+            home_lines = self._nba_player_lines(home_team, home_box)
+            if away_lines:
+                lines.append(f"{away_team}：{'；'.join(away_lines)}。")
+            if home_lines:
+                lines.append(f"{home_team}：{'；'.join(home_lines)}。")
+            factors = sample.get("decisive_factors") or []
+            if factors:
+                lines.append("")
+                lines.append("【胜负手】")
+                lines.extend(f"• {factor}" for factor in factors)
+            lines.append("")
+            lines.append("【战术执行与模型解读】")
+            lines.append(self._nba_strategy_readout(sample))
+        else:
+            factors = self._decisive_factors(state)
+            if factors:
+                lines.append("全场关键数据：" + "；".join(factors) + "。")
+
+        notes = [note for note in analyst_notes.get(state.sport, [])
+                 if state.team_a.casefold() in str(note.title).casefold()
+                 or state.team_b.casefold() in str(note.title).casefold()]
+        if notes:
+            lines.append(f"公开分析师参考：{len(notes)} 篇（仅作为特征留存，不改变本场结算概率）。")
+        lines.append("该复盘文本作为赛后样本沉淀，用于后续模型迭代，不参与当前推送数值计算。")
+        return "\n".join(lines)
+
     def _result_review_alerts(self, states: list, now: datetime,
                                analyst_notes: dict[str, list] | None = None,
-                               game_details: dict[str, list[dict]] | None = None) -> list[LiveAlert]:
+                               game_details: dict[str, list[dict]] | None = None,
+                               nba_game_details: dict[str, list[dict]] | None = None) -> list[LiveAlert]:
         analyst_notes = analyst_notes or {}
         alerts = []
         for state in states:
             if state.sport not in {"lol", "nba"}:
                 continue
-            if not (state.finished or str(state.status).casefold() in {"finished", "completed", "post", "final"}):
+            if not self._is_finished_state(state):
                 continue
             actual_side = self._winner_side(state)
             if actual_side is None:
@@ -253,17 +531,34 @@ class LiveSupervisor:
                 reasons.append(
                     f"BP后预测：蓝方 {bp_probability:.1%}｜红方 {1-bp_probability:.1%}；判断{result}。"
                 )
-            if (prematch_side == actual_side) or (bp_side == actual_side):
-                reasons.append("复盘：比赛走势与预测方向一致，优势方按预期滚动并转化为胜利。")
+
+            if state.sport == "nba":
+                game_samples = self._compute_nba_box_samples(state, nba_game_details or {})
+                if game_samples:
+                    state.features["nba_game_samples"] = game_samples
+                    state.features["nba_decisive_factors"] = list(game_samples[0].get("decisive_factors") or [])
             else:
-                reasons.append("复盘：比赛走势偏离预测，需重点核查阵容克制、资源节奏或临场发挥。")
+                game_samples = state.features.get("bp_game_samples", [])
+
+            if state.sport == "nba":
+                if prematch_side == actual_side:
+                    reasons.append("复盘：比赛走势与赛前方向一致，执行力与节奏控制兑现为胜果。")
+                else:
+                    reasons.append("复盘：比赛走势偏离赛前方向，需重点核查临场阵容、轮换与战术匹配。")
+            else:
+                if (prematch_side == actual_side) or (bp_side == actual_side):
+                    reasons.append("复盘：比赛走势与预测方向一致，优势方按预期滚动并转化为胜利。")
+                else:
+                    reasons.append("复盘：比赛走势偏离预测，需重点核查阵容克制、资源节奏或临场发挥。")
 
             notes = [note for note in analyst_notes.get(state.sport, [])
                      if state.team_a.casefold() in str(note.title).casefold()
                      or state.team_b.casefold() in str(note.title).casefold()]
             decisive_factors = self._decisive_factors(state)
-            game_samples = state.features.get("bp_game_samples", []) if state.sport == "lol" else []
-            series_analysis = self._build_series_review_analysis(state, game_samples, analyst_notes)
+            if state.sport == "lol":
+                series_analysis = self._build_series_review_analysis(state, game_samples, analyst_notes)
+            else:
+                series_analysis = self._build_nba_review_analysis(state, game_samples, analyst_notes)
             key = match_key(state)
             alerts.append(LiveAlert(
                 key, state.sport, "IMPORTANT", 70, "POSTMATCH_REVIEW",
@@ -752,6 +1047,7 @@ class LiveSupervisor:
         states = self.collect_states()
         lol_game_details = self._lol_game_details()
         self._add_lol_draft_probabilities(states, lol_game_details)
+        nba_game_details = self._nba_game_details(states)
         news = self._attempt("news_rss", lambda: RssNewsProvider().recent())
         for state in states:
             matched = [item for item in news if state.team_a.casefold() in item.title.casefold() or
@@ -783,7 +1079,7 @@ class LiveSupervisor:
                 self.on_alert(alert)
         lifecycle = (self._prematch_alerts(report, now, analyst_notes) +
                      self._lifecycle_alerts(states, previous) +
-                     self._result_review_alerts(states, now, analyst_notes, lol_game_details) +
+                     self._result_review_alerts(states, now, analyst_notes, lol_game_details, nba_game_details) +
                      self._watcher_alerts(report, states, now))
         emitted_lifecycle = [alert for alert in lifecycle if self._emit_once(alert)]
         alerts.extend(emitted_lifecycle)
