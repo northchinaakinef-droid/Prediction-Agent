@@ -28,6 +28,25 @@ class ServerDeliveryTests(unittest.TestCase):
         client.send_post.assert_called_once()
         client.send_text.assert_called_once_with("实时告警")
 
+    def test_live_push_filters_to_valuable_categories_only(self):
+        server = load_server_module()
+        with patch.object(server, "_send_message") as send:
+            server._send_valuable_alert({"category": "WATCHER_MISSING"})
+            send.assert_not_called()
+        prematch = {
+            "category": "PREMATCH_ANALYSIS", "severity": "IMPORTANT", "alert_score": 55,
+            "sport": "lol", "title": "BLG vs WE", "summary": "赛前方向：BLG",
+            "reasons": [], "details": {
+                "outcome": "BLG", "team_a": "BLG", "team_b": "WE",
+                "blue_win_probability": .63, "red_win_probability": .37,
+                "blue_market_probability": .58, "red_market_probability": .42,
+                "reasons": ["队伍底蕴优势"], "analyst_count": 2,
+            },
+        }
+        with patch.object(server, "_send_message") as send:
+            server._send_valuable_alert(prematch)
+            send.assert_called_once()
+
     def test_health_requires_completed_live_scan(self):
         server = load_server_module()
         server.STATE.update(error=None, live_error=None, live=None)
