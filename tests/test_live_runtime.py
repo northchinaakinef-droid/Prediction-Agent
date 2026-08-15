@@ -12,6 +12,54 @@ from prediction_agent.live_runtime import LiveSupervisor
 from prediction_agent.providers.live_data import LiveState
 
 
+def _nba_boxscore():
+    return {
+        "game_id": "0022400001",
+        "game_status": 3,
+        "game_status_text": "Final",
+        "period": 4,
+        "game_time_utc": "2025-06-01T00:00:00Z",
+        "duration": "PT02H10M",
+        "duration_seconds": 7800.0,
+        "home_team": {
+            "team_id": 1610612747, "team_name": "Lakers", "team_city": "Los Angeles",
+            "team_tricode": "LAL", "score": 110,
+            "periods": [{"period": 1, "periodType": "REGULAR", "score": 28},
+                        {"period": 2, "periodType": "REGULAR", "score": 30}],
+            "statistics": {
+                "fieldGoalsMade": 40, "fieldGoalsAttempted": 88, "threePointersMade": 12,
+                "freeThrowsMade": 18, "freeThrowsAttempted": 22, "turnoversTotal": 10,
+                "turnovers": 10, "reboundsOffensive": 11, "reboundsDefensive": 32,
+                "reboundsTotal": 43, "pointsInThePaint": 46, "pointsFastBreak": 12,
+                "pointsSecondChance": 10, "pointsFromTurnovers": 14, "benchPoints": 32,
+                "assists": 24, "steals": 8, "blocks": 5, "leadChanges": 4,
+                "timesTied": 3, "biggestLead": 12, "minutes": "PT240M",
+            },
+            "players": [{
+                "person_id": 1, "name": "LeBron James", "jersey_num": "23", "position": "F",
+                "starter": True, "played": True, "minutes": "PT36M00.00S", "minutes_seconds": 2160.0,
+                "points": 28, "rebounds_total": 8, "assists": 7, "plus_minus_points": 9,
+            }],
+        },
+        "away_team": {
+            "team_id": 1610612738, "team_name": "Celtics", "team_city": "Boston",
+            "team_tricode": "BOS", "score": 104,
+            "periods": [{"period": 1, "periodType": "REGULAR", "score": 25},
+                        {"period": 2, "periodType": "REGULAR", "score": 27}],
+            "statistics": {
+                "fieldGoalsMade": 38, "fieldGoalsAttempted": 90, "threePointersMade": 10,
+                "freeThrowsMade": 18, "freeThrowsAttempted": 24, "turnoversTotal": 14,
+                "turnovers": 14, "reboundsOffensive": 12, "reboundsDefensive": 30,
+                "reboundsTotal": 42, "pointsInThePaint": 42, "pointsFastBreak": 10,
+                "pointsSecondChance": 12, "pointsFromTurnovers": 11, "benchPoints": 25,
+                "assists": 22, "steals": 7, "blocks": 4, "leadChanges": 4,
+                "timesTied": 3, "biggestLead": 8, "minutes": "PT240M",
+            },
+            "players": [],
+        },
+    }
+
+
 class LiveRuntimeTests(unittest.TestCase):
     def test_stale_daily_report_is_not_used_for_live_alerts(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -233,6 +281,66 @@ class LiveRuntimeTests(unittest.TestCase):
             again = supervisor._lifecycle_alerts([live], {match_key(live): previous})
         self.assertFalse(any(alert.category == "DRAFT_ANALYSIS" for alert in again))
 
+
+    def test_nba_box_samples_include_analyst_metrics(self):
+        now = datetime.now(timezone.utc)
+        with tempfile.TemporaryDirectory() as temp:
+            supervisor = LiveSupervisor(root=Path(temp))
+            state = LiveState("nba_official", "0022400001", "nba", now, "FINISHED",
+                              "Celtics", "Lakers", 104, 110,
+                              features={"period": 4}, finished=True)
+            game_details = {match_key(state): [_nba_boxscore()]}
+            samples = supervisor._compute_nba_box_samples(state, game_details)
+        self.assertEqual(len(samples), 1)
+        self.assertEqual(samples[0]["home_team"], "Lakers")
+        self.assertEqual(samples[0]["away_team"], "Celtics")
+        self.assertIn("home_four_factors", samples[0]["metrics"])
+        self.assertIn("pace", samples[0]["metrics"])
+        self.assertTrue(samples[0]["decisive_factors"])
+
+    def test_nba_review_analysis_is_analyst_grade(self):
+        now = datetime.now(timezone.utc)
+        with tempfile.TemporaryDirectory() as temp:
+            supervisor = LiveSupervisor(root=Path(temp))
+            state = LiveState("nba_official", "0022400001", "nba", now, "FINISHED",
+                              "Celtics", "Lakers", 104, 110,
+                              features={"period": 4}, finished=True)
+            samples = supervisor._compute_nba_box_samples(
+                state, {match_key(state): [_nba_boxscore()]}
+            )
+            text = supervisor._build_nba_review_analysis(state, samples, {})
+        self.assertIn("NBA 赛后复盘", text)
+        self.assertIn("【四要素效率】", text)
+        self.assertIn("【节奏与效率】", text)
+        self.assertIn("【比赛走势】", text)
+        self.assertIn("【球员表现】", text)
+        self.assertIn("【战术执行与模型解读】", text)
+        self.assertGreater(len(text.splitlines()), 10)
+
+    def test_nba_result_review_alert_persists_box_samples(self):
+        now = datetime.now(timezone.utc)
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "reports").mkdir()
+            (root / "reports" / "daily.json").write_text(json.dumps({
+                "report_date": datetime.now(ZoneInfo("Asia/Singapore")).date().isoformat(),
+                "recommendations": [{
+                    "sport": "nba", "event": "Boston Celtics vs Los Angeles Lakers", "outcome": "Lakers",
+                    "model_probability": .60,
+                }],
+            }), encoding="utf-8")
+            supervisor = LiveSupervisor(root=root)
+            state = LiveState("nba_official", "0022400001", "nba", now, "FINISHED",
+                              "Celtics", "Lakers", 104, 110,
+                              features={"period": 4}, finished=True)
+            alerts = supervisor._result_review_alerts(
+                [state], now, {}, {}, {match_key(state): [_nba_boxscore()]}
+            )
+        self.assertEqual(len(alerts), 1)
+        self.assertEqual(alerts[0].category, "POSTMATCH_REVIEW")
+        self.assertEqual(alerts[0].details["game_samples"][0]["home_team"], "Lakers")
+        self.assertIn("【四要素效率】", alerts[0].details["series_analysis"])
+        self.assertTrue(alerts[0].details["decisive_factors"])
 
 if __name__ == "__main__":
     unittest.main()

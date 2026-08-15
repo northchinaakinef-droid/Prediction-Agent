@@ -5,7 +5,8 @@ from unittest.mock import patch
 
 from prediction_agent.providers.live_data import (
     Bo3Cs2Provider, DataSourceUnavailable, EspnNbaProvider, GridOpenAccessProvider,
-    LeaguepediaDraftProvider, PandaScoreProvider, SportSrcNbaProvider, TheSportsDbNbaProvider,
+    LeaguepediaDraftProvider, NbaBoxscoreProvider, PandaScoreProvider, SportSrcNbaProvider,
+    TheSportsDbNbaProvider,
 )
 
 
@@ -96,6 +97,56 @@ class LiveDataProviderTests(unittest.TestCase):
         rows = SportSrcNbaProvider().schedule(date(2026, 8, 14))
         self.assertEqual([row.source_id for row in rows], ["nba"])
 
+
+    @patch("prediction_agent.providers.live_data._get_json")
+    def test_nba_boxscore_parses_team_and_player_stats(self, get_json):
+        get_json.return_value = {"game": {
+            "gameId": "0022400001", "gameStatus": 3, "gameStatusText": "Final",
+            "period": 4, "gameTimeUTC": "2025-06-01T00:00:00Z", "duration": "PT02H10M",
+            "homeTeam": {
+                "teamId": 1610612747, "teamName": "Lakers", "teamCity": "Los Angeles",
+                "teamTricode": "LAL", "score": 110,
+                "periods": [{"period": 1, "periodType": "REGULAR", "score": 28}],
+                "statistics": {
+                    "fieldGoalsMade": 40, "fieldGoalsAttempted": 88, "threePointersMade": 12,
+                    "freeThrowsMade": 18, "freeThrowsAttempted": 22, "turnoversTotal": 10,
+                    "reboundsOffensive": 11, "reboundsDefensive": 32, "reboundsTotal": 43,
+                    "pointsInThePaint": 46, "pointsFastBreak": 12, "pointsSecondChance": 10,
+                    "pointsFromTurnovers": 14, "benchPoints": 32, "assists": 24,
+                    "steals": 8, "blocks": 5, "leadChanges": 4, "timesTied": 3,
+                    "biggestLead": 12, "minutes": "PT240M",
+                },
+                "players": [{
+                    "personId": 1, "name": "LeBron James", "jerseyNum": "23", "position": "F",
+                    "starter": "1", "played": "1",
+                    "statistics": {"points": 28, "reboundsTotal": 8, "assists": 7,
+                                   "plusMinusPoints": 9, "minutes": "PT36M00.00S"},
+                }],
+            },
+            "awayTeam": {
+                "teamId": 1610612738, "teamName": "Celtics", "teamCity": "Boston",
+                "teamTricode": "BOS", "score": 104,
+                "periods": [{"period": 1, "periodType": "REGULAR", "score": 25}],
+                "statistics": {
+                    "fieldGoalsMade": 38, "fieldGoalsAttempted": 90, "threePointersMade": 10,
+                    "freeThrowsMade": 18, "freeThrowsAttempted": 24, "turnoversTotal": 14,
+                    "reboundsOffensive": 12, "reboundsDefensive": 30, "reboundsTotal": 42,
+                    "pointsInThePaint": 42, "pointsFastBreak": 10, "pointsSecondChance": 12,
+                    "pointsFromTurnovers": 11, "benchPoints": 25, "assists": 22,
+                    "steals": 7, "blocks": 4, "leadChanges": 4, "timesTied": 3,
+                    "biggestLead": 8, "minutes": "PT240M",
+                },
+                "players": [],
+            },
+        }}
+        box = NbaBoxscoreProvider().boxscore("0022400001")
+        self.assertIsNotNone(box)
+        self.assertEqual(box["game_id"], "0022400001")
+        self.assertEqual(box["home_team"]["team_tricode"], "LAL")
+        self.assertTrue(box["home_team"]["winner"])
+        self.assertEqual(box["away_team"]["players"], [])
+        self.assertEqual(box["home_team"]["players"][0]["name"], "LeBron James")
+        self.assertAlmostEqual(box["home_team"]["players"][0]["minutes_seconds"], 2160.0)
 
 if __name__ == "__main__":
     unittest.main()

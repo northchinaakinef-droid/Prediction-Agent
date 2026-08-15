@@ -12,6 +12,7 @@ from urllib.request import Request, urlopen
 from zoneinfo import ZoneInfo
 
 from ..entities import NBA, canonical_team
+from ..nba_analytics import duration_seconds
 from .http import post_json
 
 
@@ -169,6 +170,115 @@ class EspnNbaProvider:
                 finished=state == "post",
             ))
         return states
+
+
+class NbaBoxscoreProvider:
+    """NBA.com live box score provider for structured post-game analytics.
+
+    The live scoreboard only contains current-day games, so post-game box
+    scores are fetched by game id immediately after a match is marked FINISHED.
+    The resulting JSON is normalized into team/player rows and kept as
+    structured training samples rather than being pushed verbatim.
+    """
+
+    url = "https://cdn.nba.com/static/json/liveData/boxscore/boxscore_{game_id}.json"
+    headers = {"Referer": "https://www.nba.com/", "Origin": "https://www.nba.com",
+               "Accept-Language": "en-US,en;q=0.9"}
+
+    def boxscore(self, game_id: str) -> dict | None:
+        payload = _get_json(self.url.format(game_id=game_id), headers=self.headers)
+        return self._parse(payload, game_id)
+
+    @staticmethod
+    def _player(row: dict) -> dict:
+        stats = row.get("statistics") or {}
+        minutes = stats.get("minutes") or row.get("minutes")
+        return {
+            "person_id": row.get("personId"),
+            "name": row.get("name") or row.get("nameI") or " ".join(
+                value for value in (row.get("firstName"), row.get("familyName")) if value
+            ).strip(),
+            "jersey_num": row.get("jerseyNum"),
+            "position": row.get("position"),
+            "starter": str(row.get("starter") or "") == "1",
+            "played": str(row.get("played") or "") == "1",
+            "minutes": minutes,
+            "minutes_seconds": duration_seconds(minutes),
+            "points": stats.get("points"),
+            "field_goals_made": stats.get("fieldGoalsMade"),
+            "field_goals_attempted": stats.get("fieldGoalsAttempted"),
+            "field_goals_percentage": stats.get("fieldGoalsPercentage"),
+            "three_pointers_made": stats.get("threePointersMade"),
+            "three_pointers_attempted": stats.get("threePointersAttempted"),
+            "three_pointers_percentage": stats.get("threePointersPercentage"),
+            "free_throws_made": stats.get("freeThrowsMade"),
+            "free_throws_attempted": stats.get("freeThrowsAttempted"),
+            "free_throws_percentage": stats.get("freeThrowsPercentage"),
+            "rebounds_offensive": stats.get("reboundsOffensive"),
+            "rebounds_defensive": stats.get("reboundsDefensive"),
+            "rebounds_total": stats.get("reboundsTotal"),
+            "assists": stats.get("assists"),
+            "steals": stats.get("steals"),
+            "blocks": stats.get("blocks"),
+            "turnovers": stats.get("turnovers"),
+            "fouls_personal": stats.get("foulsPersonal"),
+            "plus_minus_points": stats.get("plusMinusPoints"),
+            "points_fast_break": stats.get("pointsFastBreak"),
+            "points_in_the_paint": stats.get("pointsInThePaint"),
+            "points_second_chance": stats.get("pointsSecondChance"),
+            "raw_statistics": stats,
+        }
+
+    @staticmethod
+    def _team(row: dict) -> dict:
+        stats = row.get("statistics") or {}
+        return {
+            "team_id": row.get("teamId"),
+            "team_name": row.get("teamName"),
+            "team_city": row.get("teamCity"),
+            "team_tricode": row.get("teamTricode"),
+            "score": row.get("score"),
+            "in_bonus": row.get("inBonus"),
+            "timeouts_remaining": row.get("timeoutsRemaining"),
+            "periods": [
+                {
+                    "period": period.get("period"),
+                    "period_type": period.get("periodType"),
+                    "score": period.get("score"),
+                }
+                for period in (row.get("periods") or [])
+            ],
+            "statistics": stats,
+            "players": [NbaBoxscoreProvider._player(player) for player in (row.get("players") or [])],
+        }
+
+    def _parse(self, payload: dict, fallback_id: str) -> dict | None:
+        game = payload.get("game") or payload
+        home_team = game.get("homeTeam") or payload.get("homeTeam")
+        away_team = game.get("awayTeam") or payload.get("awayTeam")
+        if not home_team or not away_team:
+            return None
+        box = {
+            "game_id": str(game.get("gameId") or fallback_id),
+            "game_status": game.get("gameStatus"),
+            "game_status_text": game.get("gameStatusText"),
+            "period": game.get("period"),
+            "game_clock": game.get("gameClock"),
+            "game_time_utc": game.get("gameTimeUTC"),
+            "duration": game.get("duration"),
+            "duration_seconds": duration_seconds(game.get("duration")),
+            "attendance": game.get("attendance"),
+            "arena": game.get("arena") or {},
+            "officials": game.get("officials") or [],
+            "home_team": self._team(home_team),
+            "away_team": self._team(away_team),
+        }
+        home_score = box["home_team"].get("score")
+        away_score = box["away_team"].get("score")
+        if home_score is not None and away_score is not None:
+            box["home_team"]["winner"] = float(home_score) > float(away_score)
+            box["away_team"]["winner"] = float(away_score) > float(home_score)
+        return box
 
 
 class TheSportsDbNbaProvider:
