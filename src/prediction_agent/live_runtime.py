@@ -554,10 +554,14 @@ class LiveSupervisor:
                 "bans_a": list(state.features.get("bans_a", [])),
                 "bans_b": list(state.features.get("bans_b", [])),
             })
+        player_stats = self._attempt("leaguepedia_bp_players", lambda: LeaguepediaDraftProvider().live_player_stats())
+        team_stats = self._attempt("leaguepedia_bp_teams", lambda: LeaguepediaDraftProvider().live_team_stats())
         for games in details.values():
             games.sort(key=lambda row: row.get("game_time") or "")
             for index, row in enumerate(games, 1):
                 row["game_index"] = index
+                row["players"] = player_stats.get(str(row.get("game_id") or ""), [])
+                row["teams"] = team_stats.get(str(row.get("game_id") or ""), [])
         return details
 
     def _compute_lol_bp_samples(self, model, patch: str, state, game_details: dict[str, list[dict]]) -> list[dict]:
@@ -607,6 +611,8 @@ class LiveSupervisor:
                 "blue_post_draft_win": round(blue_win, 4),
                 "red_post_draft_win": round(1 - blue_win, 4),
                 "winner_side": game.get("winner_side"),
+                "players": list(game.get("players") or []),
+                "teams": list(game.get("teams") or []),
             })
         return samples
 
@@ -688,6 +694,32 @@ class LiveSupervisor:
                             objective_parts.append(f"{label} {a}-{b}")
                     if objective_parts:
                         lines.append(f"第{index}局资源控制：{'；'.join(objective_parts)}。")
+                    players = game.get("players") or []
+                    blue_player_lines = []
+                    red_player_lines = []
+                    for player in players:
+                        team = str(player.get("team") or "")
+                        try:
+                            team_norm = normalized_name(canonical_team("lol", team))
+                            blue_norm = normalized_name(canonical_team("lol", state.team_a))
+                            red_norm = normalized_name(canonical_team("lol", state.team_b))
+                        except Exception:
+                            continue
+                        k = player.get("kills")
+                        d = player.get("deaths")
+                        a = player.get("assists")
+                        gold = player.get("gold")
+                        cs = player.get("cs")
+                        line = (f"{player.get('player') or '未知'} {player.get('champion') or ''} "
+                                f"KDA {k}/{d}/{a} 金币 {gold} CS {cs}")
+                        if team_norm == blue_norm:
+                            blue_player_lines.append(line)
+                        elif team_norm == red_norm:
+                            red_player_lines.append(line)
+                    if blue_player_lines:
+                        lines.append(f"第{index}局蓝方选手表现：{'；'.join(blue_player_lines)}。")
+                    if red_player_lines:
+                        lines.append(f"第{index}局红方选手表现：{'；'.join(red_player_lines)}。")
                     if winner_team:
                         predicted_side = "a" if float(blue or 0) >= float(red or 0) else "b"
                         correct = winner_side == predicted_side

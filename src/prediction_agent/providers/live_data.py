@@ -383,6 +383,101 @@ class LeaguepediaDraftProvider:
             ))
         return rows
 
+    def live_player_stats(self) -> dict[str, list[dict]]:
+        """Return per-player post-game stats grouped by GameId."""
+        now = datetime.now(timezone.utc)
+        since = (now - timedelta(hours=10)).strftime("%Y-%m-%d %H:%M:%S")
+        payload = _get_json(self.base, params={
+            "action": "cargoquery", "format": "json", "limit": 500,
+            "tables": "ScoreboardPlayers=SP",
+            "fields": (
+                "SP.GameId,SP.Link,SP.Name,SP.Team,SP.Role,SP.Role_Number,SP.Side,SP.Champion,"
+                "SP.Kills,SP.Deaths,SP.Assists,SP.Gold,SP.CS,SP.DamageToChampions,SP.VisionScore,"
+                "SP.Items,SP.SummonerSpells,SP.KeystoneRune,SP.PrimaryTree,SP.SecondaryTree,"
+                "SP.Pentakills,SP.TeamKills,SP.TeamGold,SP.DateTime_UTC"
+            ),
+            "where": f"SP.DateTime_UTC >= '{since}'", "order_by": "SP.DateTime_UTC DESC",
+        }, headers={"User-Agent": "PredictionAgent/0.2"})
+        grouped: dict[str, list[dict]] = {}
+        for result in payload.get("cargoquery", []):
+            row = result.get("title", {})
+            game_id = str(row.get("GameId") or "")
+            if not game_id:
+                continue
+            grouped.setdefault(game_id, []).append({
+                "player": row.get("Link") or row.get("Name") or "",
+                "team": row.get("Team") or "",
+                "role": row.get("Role") or "",
+                "role_number": row.get("Role_Number"),
+                "side": row.get("Side"),
+                "champion": row.get("Champion") or "",
+                "kills": row.get("Kills"),
+                "deaths": row.get("Deaths"),
+                "assists": row.get("Assists"),
+                "gold": row.get("Gold"),
+                "cs": row.get("CS"),
+                "damage_to_champions": row.get("DamageToChampions"),
+                "vision_score": row.get("VisionScore"),
+                "items": self._picks(row.get("Items")),
+                "summoner_spells": self._picks(row.get("SummonerSpells")),
+                "keystone_rune": row.get("KeystoneRune") or "",
+                "primary_tree": row.get("PrimaryTree") or "",
+                "secondary_tree": row.get("SecondaryTree") or "",
+                "pentakills": row.get("Pentakills"),
+                "team_kills": row.get("TeamKills"),
+                "team_gold": row.get("TeamGold"),
+            })
+        return grouped
+
+    def live_team_stats(self) -> dict[str, list[dict]]:
+        """Return team-level objective stats grouped by GameId."""
+        now = datetime.now(timezone.utc)
+        since = (now - timedelta(hours=10)).strftime("%Y-%m-%d %H:%M:%S")
+        payload = _get_json(self.base, params={
+            "action": "cargoquery", "format": "json", "limit": 200,
+            "tables": "ScoreboardTeams=ST",
+            "fields": (
+                "ST.GameId,ST.Team,ST.Side,ST.Number,ST.IsWinner,ST.Score,ST.Bans,ST.Picks,"
+                "ST.Roster,ST.Dragons,ST.Clouds,ST.Infernals,ST.Mountains,ST.Oceans,"
+                "ST.Hextechs,ST.Chemtechs,ST.Elders,ST.Barons,ST.Towers,ST.Gold,ST.Kills,"
+                "ST.RiftHeralds,ST.VoidGrubs,ST.Atakhans,ST.Inhibitors"
+            ),
+            "where": f"ST.GameId IS NOT NULL", "limit": 500,
+        }, headers={"User-Agent": "PredictionAgent/0.2"})
+        grouped: dict[str, list[dict]] = {}
+        for result in payload.get("cargoquery", []):
+            row = result.get("title", {})
+            game_id = str(row.get("GameId") or "")
+            if not game_id:
+                continue
+            grouped.setdefault(game_id, []).append({
+                "team": row.get("Team") or "",
+                "side": row.get("Side") or "",
+                "number": row.get("Number"),
+                "is_winner": row.get("IsWinner"),
+                "score": row.get("Score"),
+                "bans": self._picks(row.get("Bans")),
+                "picks": self._picks(row.get("Picks")),
+                "roster": self._picks(row.get("Roster")),
+                "dragons": row.get("Dragons"),
+                "clouds": row.get("Clouds"),
+                "infernals": row.get("Infernals"),
+                "mountains": row.get("Mountains"),
+                "oceans": row.get("Oceans"),
+                "hextechs": row.get("Hextechs"),
+                "chemtechs": row.get("Chemtechs"),
+                "elders": row.get("Elders"),
+                "barons": row.get("Barons"),
+                "towers": row.get("Towers"),
+                "gold": row.get("Gold"),
+                "kills": row.get("Kills"),
+                "rift_heralds": row.get("RiftHeralds"),
+                "void_grubs": row.get("VoidGrubs"),
+                "atakhans": row.get("Atakhans"),
+                "inhibitors": row.get("Inhibitors"),
+            })
+        return grouped
+
 
 class GridOpenAccessProvider:
     central_url = "https://api-op.grid.gg/central-data/graphql"
