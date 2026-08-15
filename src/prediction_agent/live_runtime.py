@@ -536,6 +536,23 @@ class LiveSupervisor:
                 "champions_b": list(state.features.get("champions_b", [])),
                 "winner_side": state.features.get("winner_side"),
                 "finished": bool(state.finished),
+                "dragons_a": state.features.get("dragons_a"),
+                "dragons_b": state.features.get("dragons_b"),
+                "barons_a": state.features.get("barons_a"),
+                "barons_b": state.features.get("barons_b"),
+                "towers_a": state.features.get("towers_a"),
+                "towers_b": state.features.get("towers_b"),
+                "rift_heralds_a": state.features.get("rift_heralds_a"),
+                "rift_heralds_b": state.features.get("rift_heralds_b"),
+                "inhibitors_a": state.features.get("inhibitors_a"),
+                "inhibitors_b": state.features.get("inhibitors_b"),
+                "game_length_seconds": state.features.get("game_length_seconds"),
+                "patch": state.features.get("patch"),
+                "game_number": state.features.get("game_number"),
+                "players_a": list(state.features.get("players_a", [])),
+                "players_b": list(state.features.get("players_b", [])),
+                "bans_a": list(state.features.get("bans_a", [])),
+                "bans_b": list(state.features.get("bans_b", [])),
             })
         for games in details.values():
             games.sort(key=lambda row: row.get("game_time") or "")
@@ -566,12 +583,27 @@ class LiveSupervisor:
                 "game_index": int(game.get("game_index") or offset),
                 "game_id": str(game.get("game_id") or ""),
                 "game_time": str(game.get("game_time") or ""),
+                "patch": str(game.get("patch") or patch),
+                "game_number": game.get("game_number"),
+                "game_length_seconds": game.get("game_length_seconds"),
                 "blue_team": state.team_a,
                 "red_team": state.team_b,
                 "blue_champions": list(champions_a),
                 "red_champions": list(champions_b),
-                "blue_players": list(players_a),
-                "red_players": list(players_b),
+                "blue_players": list(game.get("players_a") or players_a),
+                "red_players": list(game.get("players_b") or players_b),
+                "blue_bans": list(game.get("bans_a") or []),
+                "red_bans": list(game.get("bans_b") or []),
+                "dragons_a": game.get("dragons_a"),
+                "dragons_b": game.get("dragons_b"),
+                "barons_a": game.get("barons_a"),
+                "barons_b": game.get("barons_b"),
+                "towers_a": game.get("towers_a"),
+                "towers_b": game.get("towers_b"),
+                "rift_heralds_a": game.get("rift_heralds_a"),
+                "rift_heralds_b": game.get("rift_heralds_b"),
+                "inhibitors_a": game.get("inhibitors_a"),
+                "inhibitors_b": game.get("inhibitors_b"),
                 "blue_post_draft_win": round(blue_win, 4),
                 "red_post_draft_win": round(1 - blue_win, 4),
                 "winner_side": game.get("winner_side"),
@@ -633,10 +665,29 @@ class LiveSupervisor:
                         f"({'、'.join(game.get('blue_champions') or [])})；红方 {state.team_b} "
                         f"({'、'.join(game.get('red_champions') or [])})。"
                     )
+                    blue_bans = game.get("blue_bans") or []
+                    red_bans = game.get("red_bans") or []
+                    if blue_bans or red_bans:
+                        lines.append(
+                            f"第{index}局 Ban：蓝方 {'、'.join(blue_bans)}；红方 {'、'.join(red_bans)}。"
+                        )
                     if blue is not None and red is not None:
                         lines.append(
                             f"第{index}局 BP 后模型胜率：蓝方 {float(blue):.1%}，红方 {float(red):.1%}。"
                         )
+                    objective_parts = []
+                    for label, key_a, key_b in (
+                        ("龙", "dragons_a", "dragons_b"),
+                        ("大龙", "barons_a", "barons_b"),
+                        ("塔", "towers_a", "towers_b"),
+                        ("先锋", "rift_heralds_a", "rift_heralds_b"),
+                        ("高地", "inhibitors_a", "inhibitors_b"),
+                    ):
+                        a, b = game.get(key_a), game.get(key_b)
+                        if a is not None and b is not None:
+                            objective_parts.append(f"{label} {a}-{b}")
+                    if objective_parts:
+                        lines.append(f"第{index}局资源控制：{'；'.join(objective_parts)}。")
                     if winner_team:
                         predicted_side = "a" if float(blue or 0) >= float(red or 0) else "b"
                         correct = winner_side == predicted_side
