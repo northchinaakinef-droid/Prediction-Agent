@@ -342,5 +342,45 @@ class LiveRuntimeTests(unittest.TestCase):
         self.assertIn("【四要素效率】", alerts[0].details["series_analysis"])
         self.assertTrue(alerts[0].details["decisive_factors"])
 
+    def test_prematch_dedupe_key_is_stable_across_schedule_match_ids(self):
+        now = datetime.now(timezone.utc)
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "reports").mkdir()
+            (root / "reports" / "daily.json").write_text(json.dumps({
+                "report_date": datetime.now(ZoneInfo("Asia/Singapore")).date().isoformat(),
+                "recommendations": [{
+                    "sport": "lol", "event": "T1 vs Gen.G", "outcome": "T1",
+                    "model_probability": .63,
+                }],
+                "schedule_coverage": {"lol": {"matches": [
+                    {"match_id": "m1", "team_a": "T1", "team_b": "Gen.G",
+                     "start_time": (now + timedelta(minutes=20)).isoformat()},
+                    {"match_id": "m2", "team_a": "T1", "team_b": "Gen.G",
+                     "start_time": (now + timedelta(minutes=20)).isoformat()},
+                ]}},
+            }), encoding="utf-8")
+            supervisor = LiveSupervisor(root=root)
+            alerts = supervisor._prematch_alerts(json.loads((root / "reports" / "daily.json").read_text(encoding="utf-8")), now)
+        self.assertEqual(len(alerts), 2)
+        self.assertEqual(alerts[0].dedupe_key, alerts[1].dedupe_key)
+        self.assertNotIn("m1", alerts[0].dedupe_key)
+        self.assertNotIn("m2", alerts[0].dedupe_key)
+        self.assertTrue(alerts[0].dedupe_key.endswith(":PREMATCH_ANALYSIS"))
+
+    def test_legacy_prematch_keys_are_collapsed_to_stable_key(self):
+        now = datetime.now(timezone.utc)
+        with tempfile.TemporaryDirectory() as temp:
+            supervisor = LiveSupervisor(root=Path(temp))
+            legacy_key = "lol:legacy-match-id-123:PREMATCH_ANALYSIS"
+            alert_json = json.dumps({"match_key": "lol:geng:t1"})
+            with supervisor.store.connect() as db:
+                db.execute(
+                    "INSERT INTO live_alerts(dedupe_key, observed_at, alert_json) VALUES (?, ?, ?)",
+                    (legacy_key, now.isoformat(), alert_json),
+                )
+            supervisor._collapse_legacy_prematch_dedupe()
+            self.assertTrue(supervisor.store.alert_exists("lol:geng:t1:PREMATCH_ANALYSIS"))
+
 if __name__ == "__main__":
     unittest.main()
