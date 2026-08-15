@@ -110,6 +110,19 @@ class LiveRuntimeTests(unittest.TestCase):
         self.assertEqual(first_alert.dedupe_key, second_alert.dedupe_key)
         self.assertTrue(first_alert.dedupe_key.endswith(":POSTMATCH_REVIEW"))
 
+    def test_legacy_postmatch_review_keys_are_collapsed_to_stable_key(self):
+        now = datetime.now(timezone.utc)
+        with tempfile.TemporaryDirectory() as temp:
+            supervisor = LiveSupervisor(root=Path(temp))
+            legacy_key = "lol:geng:t1:POSTMATCH_REVIEW:2026-01-01T00:00:00+00:00"
+            with supervisor.store.connect() as db:
+                db.execute(
+                    "INSERT INTO live_alerts(dedupe_key, observed_at, alert_json) VALUES (?, ?, ?)",
+                    (legacy_key, now.isoformat(), "{}"),
+                )
+            supervisor._collapse_legacy_postmatch_dedupe()
+            self.assertTrue(supervisor.store.alert_exists("lol:geng:t1:POSTMATCH_REVIEW"))
+
     def test_nba_start_and_finish_lifecycle_alerts(self):
         now = datetime.now(timezone.utc)
         with tempfile.TemporaryDirectory() as temp:
