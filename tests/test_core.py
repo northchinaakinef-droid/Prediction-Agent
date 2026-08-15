@@ -4,8 +4,8 @@ import unittest
 from prediction_agent.anomaly import detect_market_anomalies
 from prediction_agent.backtest import BacktestRow, run_backtest
 from prediction_agent.delivery import (
-    FeishuWebhookClient, _display_team, _event_name, _format_draft_alert, format_daily_post,
-    format_daily_report, format_live_alert, webhook_signature,
+    FeishuWebhookClient, _display_team, _event_name, _format_draft_alert, _format_postmatch_alert,
+    _format_prematch_alert, format_daily_post, format_daily_report, format_live_alert, webhook_signature,
 )
 from prediction_agent.models import MarketSnapshot
 from prediction_agent.risk import normalize_two_way, recommend
@@ -133,6 +133,38 @@ class CoreTests(unittest.TestCase):
         self.assertIn("LNG Esports 对 Ninjas in Pyjamas", text)
         self.assertNotIn(".CN", text)
 
+
+    def test_prematch_alert_formats_probability_and_reasons(self):
+        text = _format_prematch_alert({
+            "severity": "IMPORTANT", "alert_score": 55, "sport": "lol",
+            "title": "BLG vs WE",
+            "details": {
+                "outcome": "BLG", "blue_win_probability": .63, "red_win_probability": .37,
+                "blue_market_probability": .58, "red_market_probability": .42,
+                "reasons": ["confidence below threshold"],
+            },
+        })
+        self.assertIn("赛前分析", text)
+        self.assertIn("赛前预测方向", text)
+        self.assertIn("模型胜率", text)
+        self.assertIn("置信度未达到要求", text)
+
+    def test_postmatch_alert_compares_predictions(self):
+        text = _format_postmatch_alert({
+            "severity": "IMPORTANT", "alert_score": 70, "sport": "lol",
+            "title": "T1 vs Gen.G",
+            "details": {
+                "actual_winner": "Gen.G", "actual_side": "b",
+                "prematch_side": "a", "prematch_team": "T1",
+                "bp_side": "b", "bp_probability": .52,
+            },
+            "reasons": ["赛前预测：T1；判断错误。", "BP后预测：蓝方 52.0%｜红方 48.0%；判断正确。"],
+        })
+        self.assertIn("赛后复盘", text)
+        self.assertIn("实际胜者", text)
+        self.assertIn("赛前预测", text)
+        self.assertIn("判断：错误", text)
+        self.assertIn("判断：正确", text)
 
     def test_draft_alert_includes_strength_and_risk_sections(self):
         text = _format_draft_alert({

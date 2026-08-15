@@ -71,26 +71,147 @@ class LiveSupervisor:
                 continue
             if not now - timedelta(minutes=10) <= start <= now + timedelta(minutes=lead):
                 continue
-            wanted = {normalized_name(canonical_team("lol", str(match.get("team_a") or ""))),
-                      normalized_name(canonical_team("lol", str(match.get("team_b") or "")))}
+            team_a = str(match.get("team_a") or "")
+            team_b = str(match.get("team_b") or "")
+            wanted = {normalized_name(canonical_team("lol", team_a)),
+                      normalized_name(canonical_team("lol", team_b))}
             row = next((candidate for candidate in recommendations if all(
                 name and name in normalized_name(str(candidate.get("event") or "")) for name in wanted
             )), None)
-            title = f"{match.get('team_a')} vs {match.get('team_b')}"
-            if row and row.get("model_probability") is not None:
-                summary = (
-                    f"研究方向：{row.get('outcome') or '-'}｜赛前模型胜率：{float(row['model_probability']):.1%}｜"
-                    f"市场胜率：{float(row['market_probability']):.1%}"
-                    if row.get("market_probability") is not None else
-                    f"研究方向：{row.get('outcome') or '-'}｜赛前模型胜率：{float(row['model_probability']):.1%}｜市场暂无报价"
-                )
-                reasons = list(row.get("reasons", []))[:3]
-            else:
-                summary = "比赛已发现，但当前没有满足条件的赛前概率；不会将比赛隐藏。"
-                reasons = [str(match.get("missing_reason") or "市场映射、阵容或模型数据不足")]
+            if not row or row.get("model_probability") is None:
+                # 没有可用赛前概率时直接不推送，避免“市场未找到”这类垃圾信息。
+                continue
+            outcome = str(row.get("outcome") or "")
+            outcome_norm = normalized_name(canonical_team("lol", outcome))
+            team_a_norm = normalized_name(canonical_team("lol", team_a))
+            team_b_norm = normalized_name(canonical_team("lol", team_b))
+            if outcome_norm not in {team_a_norm, team_b_norm}:
+                continue
+            model_probability = float(row["model_probability"])
+            blue_win_probability = (model_probability if outcome_norm == team_a_norm
+                                    else 1 - model_probability)
+            red_win_probability = 1 - blue_win_probability
+            market_probability = (float(row["market_probability"])
+                                  if row.get("market_probability") is not None else None)
+            blue_market_probability = None
+            red_market_probability = None
+            if market_probability is not None:
+                blue_market_probability = (market_probability if outcome_norm == team_a_norm
+                                           else 1 - market_probability)
+                red_market_probability = 1 - blue_market_probability
+            reasons = list(row.get("reasons", []))[:3]
+            title = f"{team_a} vs {team_b}"
+            summary = (
+                f"赛前方向：{outcome}｜模型胜率：蓝方 {blue_win_probability:.1%}｜红方 {red_win_probability:.1%}"
+            )
             alerts.append(LiveAlert(
-                f"lol:{':'.join(sorted(wanted))}", "lol", "OBSERVE", 30, "PREMATCH_ANALYSIS",
+                f"lol:{':'.join(sorted(wanted))}", "lol", "IMPORTANT", 55, "PREMATCH_ANALYSIS",
                 title, summary, reasons, now, f"lol:{match.get('match_id')}:PREMATCH_ANALYSIS",
+                {
+                    "outcome": outcome,
+                    "blue_win_probability": blue_win_probability,
+                    "red_win_probability": red_win_probability,
+                    "blue_market_probability": blue_market_probability,
+                    "red_market_probability": red_market_probability,
+                    "reasons": reasons,
+                },
+            ))
+        return alerts
+
+    @staticmethod
+    def _lol_winner_side(state) -> str | None:
+        if state.score_a is not None and state.score_b is not None:
+            if state.score_a > state.score_b:
+                return "a"
+            if state.score_b > state.score_a:
+                return "b"
+        side = state.features.get("winner_side")
+        if side in {"a", "b"}:
+            return side
+        winner = str(state.features.get("winner") or "")
+        if winner:
+            if normalized_name(canonical_team("lol", winner)) == normalized_name(
+                canonical_team("lol", state.team_a)):
+                return "a"
+            if normalized_name(canonical_team("lol", winner)) == normalized_name(
+                canonical_team("lol", state.team_b)):
+                return "b"
+        return None
+
+    def _lol_prematch_side(self, state) -> str | None:
+        report = self._report()
+        if not report:
+            return None
+        recommendations = [row for row in report.get("recommendations", []) if row.get("sport") == "lol"]
+        wanted = {normalized_name(canonical_team("lol", state.team_a)),
+                  normalized_name(canonical_team("lol", state.team_b))}
+        row = next((candidate for candidate in recommendations if all(
+            name and name in normalized_name(str(candidate.get("event") or "")) for name in wanted
+        )), None)
+        if not row or row.get("model_probability") is None:
+            return None
+        outcome_norm = normalized_name(canonical_team("lol", str(row.get("outcome") or "")))
+        team_a_norm = normalized_name(canonical_team("lol", state.team_a))
+        team_b_norm = normalized_name(canonical_team("lol", state.team_b))
+        if outcome_norm == team_a_norm:
+            return "a"
+        if outcome_norm == team_b_norm:
+            return "b"
+        return None
+
+    def _result_review_alerts(self, states: list, now: datetime) -> list[LiveAlert]:
+        alerts = []
+        for state in states:
+            if state.sport != "lol":
+                continue
+            if not (state.finished or str(state.status).casefold() in {"finished", "completed", "post", "final"}):
+                continue
+            actual_side = self._lol_winner_side(state)
+            if actual_side is None:
+                continue
+            prematch_side = self._lol_prematch_side(state)
+            bp_probability = state.features.get("post_draft_probability")
+            if prematch_side is None and bp_probability is None:
+                continue
+            actual_team = state.team_a if actual_side == "a" else state.team_b
+            bp_side = None
+            if bp_probability is not None:
+                bp_probability = float(bp_probability)
+                bp_side = "a" if bp_probability >= .5 else "b"
+            prematch_team = state.team_a if prematch_side == "a" else state.team_b if prematch_side == "b" else None
+            bp_team = state.team_a if bp_side == "a" else state.team_b if bp_side == "b" else None
+
+            reasons = []
+            if prematch_side is not None:
+                result = "正确" if prematch_side == actual_side else "错误"
+                reasons.append(f"赛前预测：{prematch_team}；判断{result}。")
+            else:
+                reasons.append("赛前预测：未生成有效概率。")
+            if bp_team is not None:
+                result = "正确" if bp_side == actual_side else "错误"
+                reasons.append(
+                    f"BP后预测：蓝方 {bp_probability:.1%}｜红方 {1-bp_probability:.1%}；判断{result}。"
+                )
+            if (prematch_side == actual_side) or (bp_side == actual_side):
+                reasons.append("复盘：比赛走势与预测方向一致，优势方按预期滚动并转化为胜利。")
+            else:
+                reasons.append("复盘：比赛走势偏离预测，需重点核查阵容克制、资源节奏或临场发挥。")
+
+            key = match_key(state)
+            alerts.append(LiveAlert(
+                key, "lol", "IMPORTANT", 70, "POSTMATCH_REVIEW",
+                f"{state.team_a} vs {state.team_b}",
+                f"比赛已结束，实际胜者：{actual_team}。",
+                reasons, now, f"{key}:POSTMATCH_REVIEW:{state.observed_at.isoformat()}",
+                {
+                    "actual_winner": actual_team,
+                    "actual_side": actual_side,
+                    "prematch_side": prematch_side,
+                    "prematch_team": prematch_team,
+                    "bp_side": bp_side,
+                    "bp_team": bp_team,
+                    "bp_probability": bp_probability,
+                },
             ))
         return alerts
 
@@ -337,13 +458,16 @@ class LiveSupervisor:
             for sport, tag in TAGS.items()
         }
         previous = {match_key(state): self.store.previous(match_key(state)) for state in states}
-        alerts = self.engine.process(states, market_events, self._priors(states, market_events),
+        priors = self._priors(states, market_events)
+        alerts = self.engine.process(states, market_events, priors,
                                      alert_sports={"nba", "cs2"})
         for alert in alerts:
             if self.on_alert:
                 self.on_alert(alert)
-        lifecycle = self._prematch_alerts(report, now) + self._lifecycle_alerts(states, previous) + self._watcher_alerts(
-            report, states, now)
+        lifecycle = (self._prematch_alerts(report, now) +
+                     self._lifecycle_alerts(states, previous) +
+                     self._result_review_alerts(states, now) +
+                     self._watcher_alerts(report, states, now))
         emitted_lifecycle = [alert for alert in lifecycle if self._emit_once(alert)]
         alerts.extend(emitted_lifecycle)
         incomplete = [name for name, status in self.source_status.items() if not status["available"]]

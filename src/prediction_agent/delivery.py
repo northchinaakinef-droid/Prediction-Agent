@@ -570,10 +570,79 @@ def _format_draft_alert(row: dict[str, Any]) -> str:
     return "\n".join(lines).strip()
 
 
+def _format_prematch_alert(row: dict[str, Any]) -> str:
+    icon = "🔴" if row.get("severity") == "EMERGENCY" else "🟠" if row.get("severity") == "IMPORTANT" else "🟡"
+    severity = {"EMERGENCY": "紧急", "IMPORTANT": "重要", "OBSERVE": "关注", "NORMAL": "关注"}.get(
+        str(row.get("severity")), str(row.get("severity") or "关注"))
+    details = row.get("details") or {}
+    lines = [
+        f"{icon}【赛前分析】",
+        f"{_sport_name(row.get('sport'))}｜{_event_name(row.get('title'))}",
+        f"重要度：{float(row.get('alert_score', 0)):.0f}/100｜级别：{severity}",
+    ]
+    outcome = details.get("outcome")
+    blue = details.get("blue_win_probability")
+    red = details.get("red_win_probability")
+    if blue is not None and red is not None:
+        lines.append(f"赛前预测方向：{_display_team(outcome)}")
+        lines.append(f"模型胜率：蓝方 {float(blue):.1%}｜红方 {float(red):.1%}")
+    blue_market = details.get("blue_market_probability")
+    red_market = details.get("red_market_probability")
+    if blue_market is not None and red_market is not None:
+        lines.append(f"市场胜率：蓝方 {float(blue_market):.1%}｜红方 {float(red_market):.1%}")
+    else:
+        lines.append("市场胜率：暂无对应报价")
+    reasons = details.get("reasons") or row.get("reasons") or []
+    lines.extend(["", "预测依据："])
+    if reasons:
+        lines.extend(f"• {_zh_reason(reason)}" for reason in reasons[:4])
+    else:
+        lines.append("• 暂无补充说明。")
+    lines.extend(["", "研究监控信号，不构成下注建议。"])
+    return "\n".join(lines).strip()
+
+
+def _format_postmatch_alert(row: dict[str, Any]) -> str:
+    icon = "🔴" if row.get("severity") == "EMERGENCY" else "🟠" if row.get("severity") == "IMPORTANT" else "🟡"
+    severity = {"EMERGENCY": "紧急", "IMPORTANT": "重要", "OBSERVE": "关注", "NORMAL": "关注"}.get(
+        str(row.get("severity")), str(row.get("severity") or "关注"))
+    details = row.get("details") or {}
+    lines = [
+        f"{icon}【赛后复盘】",
+        f"{_sport_name(row.get('sport'))}｜{_event_name(row.get('title'))}",
+        f"重要度：{float(row.get('alert_score', 0)):.0f}/100｜级别：{severity}",
+    ]
+    actual_winner = details.get("actual_winner")
+    if actual_winner:
+        lines.append(f"实际胜者：{_display_team(actual_winner)}")
+    actual_side = details.get("actual_side")
+    prematch_side = details.get("prematch_side")
+    prematch_team = details.get("prematch_team")
+    if prematch_side is not None:
+        result = "正确" if prematch_side == actual_side else "错误"
+        lines.append(f"赛前预测：{_display_team(prematch_team)}｜判断：{result}")
+    else:
+        lines.append("赛前预测：未生成有效概率")
+    bp_probability = details.get("bp_probability")
+    if bp_probability is not None:
+        bp_side = details.get("bp_side")
+        result = "正确" if bp_side == actual_side else "错误"
+        lines.append(f"BP后预测：蓝方 {float(bp_probability):.1%}｜红方 {1-float(bp_probability):.1%}｜判断：{result}")
+    lines.extend(["", "复盘说明："])
+    for reason in row.get("reasons", [])[:4]:
+        lines.append(f"• {_zh_live_text(reason)}")
+    lines.extend(["", "研究监控信号，不构成下注建议。"])
+    return "\n".join(lines).strip()
+
+
 def format_live_alert(alert: LiveAlert | dict[str, Any]) -> str:
     row = alert.as_dict() if isinstance(alert, LiveAlert) else alert
     if str(row.get("category")) == "DRAFT_ANALYSIS" and row.get("details"):
         return _format_draft_alert(row)
+    if str(row.get("category")) == "PREMATCH_ANALYSIS" and row.get("details"):
+        return _format_prematch_alert(row)
+    if str(row.get("category")) == "POSTMATCH_REVIEW" and row.get("details"):
+        return _format_postmatch_alert(row)
     icon = "🔴" if row.get("severity") == "EMERGENCY" else "🟠" if row.get("severity") == "IMPORTANT" else "🟡"
     severity = {"EMERGENCY": "紧急", "IMPORTANT": "重要", "OBSERVE": "关注", "NORMAL": "关注"}.get(
         str(row.get("severity")), str(row.get("severity") or "关注")
@@ -584,7 +653,7 @@ def format_live_alert(alert: LiveAlert | dict[str, Any]) -> str:
         "PREMATCH_ANALYSIS": "赛前分析", "DRAFT_ANALYSIS": "BP 完成分析",
         "MATCH_START": "比赛开始", "PERIOD_UPDATE": "节次更新", "CLUTCH_TIME": "关键时段",
         "MATCH_FINISHED": "比赛结束", "WATCHER_MISSING": "监控缺失",
-        "MONITORING_RECOVERY": "监控恢复",
+        "MONITORING_RECOVERY": "监控恢复", "POSTMATCH_REVIEW": "赛后复盘",
     }.get(str(row.get("category")), str(row.get("category")))
     return "\n".join([
         f"{icon}【{category}】",
