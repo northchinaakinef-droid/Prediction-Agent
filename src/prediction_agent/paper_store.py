@@ -38,6 +38,20 @@ CREATE TABLE IF NOT EXISTS predictions (
     payload_json TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS predictions_event_idx ON predictions(sport, event_id, generated_at);
+CREATE TABLE IF NOT EXISTS post_match_reviews (
+    review_id TEXT PRIMARY KEY,
+    sport TEXT NOT NULL,
+    event_id TEXT NOT NULL,
+    event TEXT,
+    generated_at TEXT NOT NULL,
+    actual_winner TEXT NOT NULL,
+    predicted_winner TEXT,
+    prediction_correct INTEGER,
+    model_probability REAL,
+    bp_probability REAL,
+    decisive_factors_json TEXT NOT NULL,
+    review_json TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS settlements (
     sport TEXT NOT NULL,
     event_id TEXT NOT NULL,
@@ -89,6 +103,28 @@ def record_report(path: str | Path, report: dict[str, Any]) -> dict[str, int | s
         total = connection.execute("SELECT COUNT(*) FROM predictions").fetchone()[0]
     return {"run_id": run_id, "new_run": int(new_run), "inserted_predictions": inserted,
             "total_predictions": int(total)}
+
+
+def record_post_match_review(path: str | Path, review: dict[str, Any]) -> None:
+    """Persist one post-match review row; repeated writes are idempotent."""
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    review_id = _id(review.get("sport"), review.get("event_id"),
+                    review.get("generated_at"), review.get("actual_winner"))
+    with closing(sqlite3.connect(target)) as connection:
+        connection.executescript(SCHEMA)
+        connection.execute(
+            """INSERT OR IGNORE INTO post_match_reviews VALUES
+            (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (review_id, str(review.get("sport", "")), str(review.get("event_id", "")),
+             review.get("event"), str(review.get("generated_at", "")),
+             str(review.get("actual_winner", "")), review.get("predicted_winner"),
+             int(bool(review.get("prediction_correct"))), review.get("model_probability"),
+             review.get("bp_probability"),
+             json.dumps(review.get("decisive_factors", []), ensure_ascii=False),
+             json.dumps(review, ensure_ascii=False)),
+        )
+        connection.commit()
 
 
 def summary(path: str | Path) -> dict[str, Any]:

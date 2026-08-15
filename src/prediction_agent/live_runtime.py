@@ -18,6 +18,7 @@ from .providers.polymarket import PolymarketClient
 from .providers.news import RssNewsProvider
 from .providers.analysts import AnalystFeedProvider
 from .lol_meta_model import LolDraftGame, load_lol_meta
+from .paper_store import record_post_match_review
 
 
 TAGS = {"nba": "745", "lol": "65", "cs2": "100780"}
@@ -170,6 +171,36 @@ class LiveSupervisor:
             return "b"
         return None
 
+    @staticmethod
+    def _decisive_factors(state) -> list[str]:
+        factors: list[str] = []
+        features = state.features or {}
+        if state.sport == "lol":
+            metrics = (
+                ("经济差", features.get("gold_a"), features.get("gold_b"), "gold"),
+                ("击杀差", features.get("kills_a"), features.get("kills_b"), "kills"),
+                ("防御塔差", features.get("towers_a"), features.get("towers_b"), "towers"),
+                ("小龙差", features.get("dragons_a"), features.get("dragons_b"), "dragons"),
+                ("大龙差", features.get("barons_a"), features.get("barons_b"), "barons"),
+                ("高地塔差", features.get("inhibitors_a"), features.get("inhibitors_b"), "inhibitors"),
+            )
+            rows = []
+            for label, a, b, _ in metrics:
+                if a is None or b is None:
+                    continue
+                diff = float(a) - float(b)
+                if abs(diff) < 1e-9:
+                    continue
+                side = "蓝方" if diff > 0 else "红方"
+                rows.append((abs(diff), f"{label} {diff:+.0f}（{side}占优）"))
+            factors = [text for _, text in sorted(rows, reverse=True)[:3]]
+        elif state.sport == "nba":
+            if state.score_a is not None and state.score_b is not None:
+                diff = float(state.score_a) - float(state.score_b)
+                side = "A队" if diff > 0 else "B队"
+                factors.append(f"最终分差 {diff:+.0f}（{side}占优）")
+        return factors
+
     def _result_review_alerts(self, states: list, now: datetime,
                                analyst_notes: dict[str, list] | None = None) -> list[LiveAlert]:
         analyst_notes = analyst_notes or {}
@@ -213,6 +244,7 @@ class LiveSupervisor:
             notes = [note for note in analyst_notes.get(state.sport, [])
                      if state.team_a.casefold() in str(note.title).casefold()
                      or state.team_b.casefold() in str(note.title).casefold()]
+            decisive_factors = self._decisive_factors(state)
             key = match_key(state)
             alerts.append(LiveAlert(
                 key, state.sport, "IMPORTANT", 70, "POSTMATCH_REVIEW",
@@ -220,6 +252,7 @@ class LiveSupervisor:
                 f"比赛已结束，实际胜者：{actual_team}。",
                 reasons, now, f"{key}:POSTMATCH_REVIEW:{state.observed_at.isoformat()}",
                 {
+                    "event_id": state.source_id,
                     "actual_winner": actual_team,
                     "team_a": state.team_a,
                     "team_b": state.team_b,
@@ -234,8 +267,29 @@ class LiveSupervisor:
                     "analyst_count": len(notes),
                     "analyst_notes": [{"title": note.title, "link": note.link, "source": note.source}
                                       for note in notes[:3]],
+                    "decisive_factors": decisive_factors,
                 },
             ))
+        for alert in alerts:
+            if alert.category == "POSTMATCH_REVIEW":
+                details = alert.details or {}
+                record_post_match_review(
+                    os.getenv("PAPER_DB_PATH", str(self.root / "data" / "daily" / "paper.db")),
+                    {
+                        "sport": alert.sport,
+                        "event_id": details.get("event_id") or alert.match_key,
+                        "event": alert.title,
+                        "generated_at": now.isoformat(),
+                        "actual_winner": details.get("actual_winner"),
+                        "predicted_winner": details.get("prematch_team") or details.get("bp_team"),
+                        "prediction_correct": (details.get("prematch_side") == details.get("actual_side"))
+                                              if details.get("prematch_side") is not None
+                                              else (details.get("bp_side") == details.get("actual_side")),
+                        "model_probability": details.get("bp_probability"),
+                        "bp_probability": details.get("bp_probability"),
+                        "decisive_factors": details.get("decisive_factors", []),
+                    },
+                )
         return alerts
 
     def _lifecycle_alerts(self, states: list, previous: dict[str, dict | None]) -> list[LiveAlert]:

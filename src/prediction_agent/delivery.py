@@ -695,6 +695,10 @@ def _format_postmatch_alert(row: dict[str, Any]) -> str:
     analyst_count = int(details.get("analyst_count") or 0)
     if analyst_count:
         lines.append(f"分析师参考：已纳入 {analyst_count} 篇相关公开资料。")
+    decisive_factors = details.get("decisive_factors") or []
+    if decisive_factors:
+        lines.extend(["", "胜负手："])
+        lines.extend(f"• {factor}" for factor in decisive_factors)
     lines.extend(["", "复盘说明："])
     for reason in row.get("reasons", [])[:4]:
         lines.append(f"• {_zh_live_text(reason)}")
