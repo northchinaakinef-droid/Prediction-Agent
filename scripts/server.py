@@ -13,7 +13,7 @@ from zoneinfo import ZoneInfo
 from prediction_agent.delivery import FeishuAppClient, FeishuWebhookClient, format_daily_post, format_live_alert
 from prediction_agent.live_runtime import LiveSupervisor
 from prediction_agent.sports_daily import run_all
-from prediction_agent.paper_store import record_report, settle_pending
+from prediction_agent.paper_store import record_report, settle_pending, summary as paper_summary
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -71,6 +71,7 @@ def run_once(*, notify: bool = True) -> None:
             paper_path = Path(os.getenv("PAPER_DB_PATH", str(ROOT / "data" / "daily" / "paper.db")))
             STATE["paper_settlement"] = settle_pending(paper_path)
             STATE["paper_store"] = record_report(paper_path, report)
+            report["paper_summary"] = paper_summary(paper_path)
             STATE["last_scan"] = datetime.now(timezone.utc).isoformat()
             if notify:
                 _send(report)

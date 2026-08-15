@@ -84,7 +84,8 @@ class LolModelTests(unittest.TestCase):
                              now=datetime(2026, 8, 13, 0, tzinfo=timezone.utc), bankroll=1000)
         self.assertEqual(len(rows), 1)
         self.assertGreater(rows[0]["model_probability"], .7)
-        self.assertEqual(rows[0]["action"], "NO_BET")
+        self.assertEqual(rows[0]["action"], "BET")
+        self.assertGreater(rows[0]["stake"], 0)
 
     def test_non_game_market_is_excluded(self):
         model = EloModel({}, {}, "2026-06-01", 10)

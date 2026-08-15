@@ -165,7 +165,7 @@ def analyze_sport(sport: str, model: EloModel | NbaModel, evaluation: dict, even
             decimal_odds=1 / ask, bankroll=bankroll, confidence=.75 if probability_ok else .25,
             spread=float(market["spread"]) if market.get("spread") is not None else None,
             available_size=float(market.get("liquidity") or 0), estimated_cost=estimated_cost,
-            trading_enabled=money_ok and not started,
+            trading_enabled=probability_ok and not started,
         )
         reasons = (model.explain(team_a, team_b, scheduled)
                    if sport == "nba" and isinstance(model, NbaModel)
@@ -253,7 +253,7 @@ def _research_row(sport: str, event: dict, market: dict, scheduled: datetime | N
         decimal_odds=1 / ask, bankroll=bankroll, confidence=.75 if probability_ok else .25,
         spread=float(market["spread"]) if market.get("spread") is not None else None,
         available_size=float(market.get("liquidity") or 0), estimated_cost=estimated_cost,
-        trading_enabled=money_ok and probability_ok and not started,
+        trading_enabled=probability_ok and not started,
     )
     if not probability_ok:
         reasons.append("阵容未知、阵容过期、样本不足或概率模型未通过验收，因此只展示研究值。")
@@ -361,7 +361,7 @@ def run_all(model_dir: str | Path, output: str | Path, *, now: datetime | None =
     now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     zone = ZoneInfo(os.getenv("REPORT_TIMEZONE", "Asia/Singapore"))
     report_day = report_day or now.astimezone(zone).date()
-    bankroll = float(os.getenv("BANKROLL_USDC", "1000"))
+    bankroll = float(os.getenv("BANKROLL_USDC", "10000"))
     recommendations, statuses = [], {}
     client = PolymarketClient(timeout=30)
     market_events = {sport: client.all_events_by_tag(tag, page_size=100) for sport, tag in TAGS.items()}

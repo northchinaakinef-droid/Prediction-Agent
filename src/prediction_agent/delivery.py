@@ -307,11 +307,25 @@ def format_daily_report(report: dict[str, Any], report_date: date | None = None)
                 f"模型胜率：{_two_sided_probability(model, outcome, team_a, team_b)}",
                 f"市场胜率：{_two_sided_probability(market, outcome, team_a, team_b)}",
                 f"净优势：{percent(row.get('edge'))}｜净期望值：{percent(row.get('expected_value'))}｜可买价：{price(row.get('execution_price'))}",
-                *(f"• {reason}" for reason in reasons),
             ])
+            if is_bet and row.get("stake") is not None:
+                lines.append(f"模拟下注：{float(row['stake']):.2f} USDC")
+            lines.extend(f"• {reason}" for reason in reasons)
 
     bankroll = report.get("bankroll_usdc")
     bankroll_text = f"{float(bankroll):.2f} USDC" if bankroll is not None else "等待当日汇率"
+    paper_summary = report.get("paper_summary") or {}
+    if paper_summary.get("predictions") is not None:
+        by_sport = paper_summary.get("by_sport") or {}
+        lines.extend(["", "【模拟资金】", f"研究本金：{bankroll_text}"])
+        lines.append(f"累计预测 {paper_summary.get('predictions', 0)} 场｜已结算 {paper_summary.get('settled', 0)} 场")
+        for sport, stat in by_sport.items():
+            roi = stat.get("paper_roi")
+            roi_text = f"{roi:.1%}" if isinstance(roi, (int, float)) else "暂无"
+            lines.append(
+                f"{_sport_name(sport)}：模拟利润 {float(stat.get('paper_profit', 0)):.2f} USDC｜ROI {roi_text}"
+            )
+        lines.append("说明：模拟盘仅用于学习与模型迭代，不涉及真实资金。")
     lines.extend([
         "",
         "【风控状态】",
