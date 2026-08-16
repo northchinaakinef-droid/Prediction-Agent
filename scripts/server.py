@@ -11,14 +11,15 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from prediction_agent.delivery import (
-    FeishuAppClient, FeishuWebhookClient, format_daily_post, format_live_alert,
-    format_paper_betting_summary,
+    FeishuAppClient, FeishuWebhookClient, format_attribution_report, format_daily_post,
+    format_live_alert, format_paper_betting_summary,
 )
 from prediction_agent.live_runtime import LiveSupervisor
 from prediction_agent.sports_daily import run_all
 from prediction_agent.paper_store import (
-    mark_paper_summary_sent, paper_daily_summary, paper_summary_sent,
-    record_report, settle_pending, summary as paper_summary,
+    attribution, mark_paper_summary_sent, mark_weekly_attribution_sent,
+    paper_daily_summary, paper_summary_sent, record_report, settle_pending,
+    summary as paper_summary, weekly_attribution_sent,
 )
 
 
@@ -26,7 +27,7 @@ ROOT = Path(__file__).resolve().parents[1]
 STATE = {"started_at": datetime.now(timezone.utc).isoformat(), "last_run": None,
          "last_ok": None, "last_scan": None, "last_push": None,
          "error": None, "paper_store": None, "paper_settlement": None,
-         "live": None, "live_error": None}
+         "live": None, "live_error": None, "last_weekly_attribution": None}
 RUN_LOCK = threading.Lock()
 SOURCE_LABELS = {
     "nba_official": "NBA 官方比分", "espn_nba": "ESPN NBA", "thesportsdb_nba": "TheSportsDB NBA",
@@ -128,6 +129,39 @@ def _run_paper_summary() -> None:
     mark_paper_summary_sent(paper_path, report_date, datetime.now(timezone.utc).isoformat())
 
 
+def _next_weekly_attribution_run(now: datetime) -> datetime:
+    zone = ZoneInfo(os.getenv("REPORT_TIMEZONE", "Asia/Singapore"))
+    hour, minute = (int(x) for x in os.getenv("WEEKLY_REPORT_TIME", "07:00").split(":", 1))
+    local = now.astimezone(zone)
+    target = local.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    # Monday is 0 in Python's date.weekday().
+    days_ahead = (0 - target.weekday()) % 7
+    target += timedelta(days=days_ahead)
+    if target <= local:
+        target += timedelta(days=7)
+    return target.astimezone(timezone.utc)
+
+
+def _run_weekly_attribution() -> None:
+    """Send one weekly attribution report per ISO week, then mark it sent."""
+    zone = ZoneInfo(os.getenv("REPORT_TIMEZONE", "Asia/Singapore"))
+    local_today = datetime.now(zone).date()
+    iso = local_today.isocalendar()
+    report_week = f"{iso[0]}-W{iso[1]:02d}"
+    paper_path = Path(os.getenv("PAPER_DB_PATH", str(ROOT / "data" / "daily" / "paper.db")))
+    try:
+        settle_pending(paper_path)
+    except Exception:
+        pass
+    if weekly_attribution_sent(paper_path, report_week):
+        return
+    since = (local_today - timedelta(days=7)).isoformat()
+    report = attribution(paper_path, since=since)
+    _send_message(format_attribution_report(report, local_today.isoformat()))
+    mark_weekly_attribution_sent(paper_path, report_week, datetime.now(timezone.utc).isoformat())
+    STATE["last_weekly_attribution"] = datetime.now(timezone.utc).isoformat()
+
+
 def scheduler() -> None:
     if os.getenv("RUN_ON_START", "false").casefold() == "true":
         try:
@@ -162,6 +196,19 @@ def paper_scheduler() -> None:
         except Exception:
             pass
         time.sleep(minutes * 60)
+
+
+def weekly_attribution_scheduler() -> None:
+    while True:
+        now = datetime.now(timezone.utc)
+        next_weekly = _next_weekly_attribution_run(now)
+        wait = max(1.0, (next_weekly - now).total_seconds())
+        time.sleep(min(wait, 60))
+        if datetime.now(timezone.utc) >= next_weekly - timedelta(seconds=1):
+            try:
+                _run_weekly_attribution()
+            except Exception:
+                pass
 
 
 ALLOWED_LIVE_ALERT_CATEGORIES = {"PREMATCH_ANALYSIS", "DRAFT_ANALYSIS", "POSTMATCH_REVIEW"}
@@ -231,6 +278,7 @@ class Health(BaseHTTPRequestHandler):
 def main() -> None:
     threading.Thread(target=scheduler, daemon=True).start()
     threading.Thread(target=paper_scheduler, daemon=True).start()
+    threading.Thread(target=weekly_attribution_scheduler, daemon=True).start()
     threading.Thread(target=live_scheduler, daemon=True).start()
     ThreadingHTTPServer(("0.0.0.0", int(os.getenv("PORT", "8080"))), Health).serve_forever()
 

@@ -237,3 +237,82 @@ def recommend(
         reasons=tuple(reasons),
         decision=f"BUY {outcome.upper()}" if action == "BET" else "NO TRADE",
     )
+
+PAPER_STAKE_FRACTION = 0.005
+PAPER_MIN_EDGE = 0.015
+PAPER_MIN_EV = 0.05
+PAPER_OPPOSITE_DIRECTION_MIN_EV = 0.10
+
+
+def paper_recommend(
+    *,
+    event_id: str,
+    outcome: str,
+    model_probability: float,
+    decimal_odds: float,
+    bankroll: float,
+    estimated_cost: float = 0.0,
+    max_bet_fraction: float = PAPER_STAKE_FRACTION,
+    direction_match: bool | None = None,
+    risk_reasons: tuple[str, ...] = (),
+) -> Recommendation:
+    """Recommend a paper bet under the cold-start paper-trading rules.
+
+    Paper mode is intentionally looser than real-money mode.  It does not use
+    Kelly sizing and does not require a passed ROI acceptance or a complete
+    lineup; instead it records a fixed 0.5% stake whenever the edge and EV
+    thresholds pass.  The daily risk cap is still enforced by the caller
+    through ``max_bet_fraction``.
+    """
+    if bankroll < 0 or not 0 <= model_probability <= 1 or decimal_odds <= 1:
+        raise ValueError("invalid probability or odds")
+    market_probability = decimal_implied_probability(decimal_odds)
+    # Paper mode does not shrink toward the market: lineup uncertainty is
+    # recorded as a field, not used to discard the sample.
+    edge = model_probability - market_probability
+    net_edge = edge - max(0.0, estimated_cost)
+    ev = model_probability * decimal_odds - 1 - max(0.0, estimated_cost)
+    if direction_match is None:
+        direction_match = market_probability >= 0.5
+    if max_bet_fraction < PAPER_STAKE_FRACTION:
+        stake_fraction = 0.0
+    else:
+        stake_fraction = PAPER_STAKE_FRACTION
+    reasons: list[str] = [
+        f"paper edge={edge:.2%}",
+        f"paper cost-adjusted edge={net_edge:.2%}",
+        f"paper net EV={ev:.2%}",
+        "paper mode fixed 0.5% stake",
+    ]
+    reasons.extend(risk_reasons)
+    if max_bet_fraction < PAPER_STAKE_FRACTION:
+        reasons.append("insufficient remaining risk budget for fixed 0.5% paper stake")
+    if not direction_match:
+        reasons.append("prediction direction opposes market favorite")
+    if net_edge <= PAPER_MIN_EDGE:
+        reasons.append("paper cost-adjusted edge below 1.5%")
+    if ev <= PAPER_MIN_EV:
+        reasons.append("paper net EV below 5%")
+    if not direction_match and ev <= PAPER_OPPOSITE_DIRECTION_MIN_EV:
+        reasons.append("opposite-direction paper bet requires EV>10%")
+    if (not math.isfinite(ev) or net_edge <= PAPER_MIN_EDGE or ev <= PAPER_MIN_EV
+            or stake_fraction <= 0 or (not direction_match and ev <= PAPER_OPPOSITE_DIRECTION_MIN_EV)):
+        action, stake_fraction = "NO_BET", 0.0
+    else:
+        action = "BET"
+    return Recommendation(
+        event_id=event_id,
+        outcome=outcome,
+        action=action,
+        model_probability=model_probability,
+        market_probability=market_probability,
+        decision_probability=model_probability,
+        raw_edge=edge,
+        edge=edge,
+        expected_value=ev,
+        stake=round(bankroll * stake_fraction, 2),
+        stake_fraction=stake_fraction,
+        confidence=1.0,
+        reasons=tuple(reasons),
+        decision=f"BUY {outcome.upper()}" if action == "BET" else "NO TRADE",
+    )

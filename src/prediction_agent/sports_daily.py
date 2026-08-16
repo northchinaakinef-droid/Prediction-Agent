@@ -19,7 +19,7 @@ from .providers.live_data import (
     Bo3Cs2Provider, EsportAgendaCs2Provider, EspnNbaProvider, GridOpenAccessProvider, NbaOfficialProvider,
     PandaScoreProvider, SportSrcNbaProvider, TheSportsDbNbaProvider,
 )
-from .risk import RiskBudgetLedger, RiskConfig, recommend
+from .risk import RiskBudgetLedger, RiskConfig, paper_recommend, recommend
 from .entities import canonical_team, normalized_name
 from .costs import estimate_cost_rate
 from .narrative import build_pre_match_summary
@@ -104,6 +104,44 @@ def _probability_sanity(model_probability: float, market_probability: float | No
     return problems
 
 
+def _ev_tier(value: float | None) -> str:
+    if value is None:
+        return "未知"
+    if value > 0.15:
+        return "高"
+    if value > 0.05:
+        return "中"
+    return "低"
+
+
+def _direction_match(prices: list[float], side: int) -> bool:
+    """Return True when the model side is the market favorite (lower payout side)."""
+    if not prices or side is None:
+        return False
+    return side == max(range(len(prices)), key=lambda index: prices[index])
+
+
+def _lineup_status(roster_a: tuple[str, ...], roster_b: tuple[str, ...],
+                   last_games: dict[str, str], teams: tuple[str, str],
+                   now: datetime, max_age_days: int) -> str:
+    """Classify lineup availability for paper-betting attribution."""
+    if len(roster_a) != 5 or len(roster_b) != 5:
+        return "未知"
+    return "完整" if _roster_fresh(last_games, teams, now, max_age_days) else "过期"
+
+
+def _paper_daily_report(rows: list[dict], bankroll: float,
+                        committed_fraction: float, max_daily_risk_fraction: float) -> dict:
+    bets = [row for row in rows if row.get("action") == "BET"]
+    total_stake = sum(float(row.get("stake") or 0) for row in bets)
+    return {
+        "bet_count": len(bets),
+        "skipped_count": len(rows) - len(bets),
+        "total_stake": total_stake,
+        "committed_fraction": committed_fraction,
+        "remaining_limit": max(0.0, bankroll * (max_daily_risk_fraction - committed_fraction)),
+    }
+
 def _find_schedule_match(schedule_matches: list[dict] | None, sport: str,
                          team_a: str, team_b: str, scheduled: datetime | None) -> dict | None:
     if not schedule_matches or scheduled is None:
@@ -172,6 +210,7 @@ def analyze_sport(sport: str, model: EloModel | NbaModel, evaluation: dict, even
         p_a = series_probability(game_p, best_of)
         model_ps = [p_a, 1 - p_a]
         side = max(range(2), key=lambda index: model_ps[index] - prices[index])
+        direction_match = _direction_match(prices, side)
         first_bid, first_ask = market.get("bestBid"), market.get("bestAsk")
         ask = float(first_ask) if side == 0 and first_ask is not None else (
             1 - float(first_bid) if side == 1 and first_bid is not None else prices[side])
@@ -185,18 +224,25 @@ def analyze_sport(sport: str, model: EloModel | NbaModel, evaluation: dict, even
         cost = estimate_cost_rate(ask) if estimated_cost is None else estimated_cost
         cap = ledger.cap_for(event_key, group)
         risk_reasons = ledger.exhausted_reasons(event_key, group)
-        rec = recommend(
-            event_id=event_key, outcome=outcomes[side], model_probability=model_ps[side],
-            decimal_odds=1 / ask, bankroll=bankroll,
-            confidence=.75 if (probability_ok or paper_enabled) else .25,
-            spread=float(market["spread"]) if market.get("spread") is not None else None,
-            available_size=float(market.get("liquidity") or 0), estimated_cost=cost,
-            trading_enabled=(probability_ok or paper_enabled) and not started,
-            kelly_scale=risk_config.kelly_scale, max_bet_fraction=cap,
-            min_edge=risk_config.min_edge, min_confidence=risk_config.min_confidence,
-            max_spread=risk_config.max_spread, min_available_size=risk_config.min_available_size,
-            max_depth_fraction=risk_config.max_depth_fraction, risk_reasons=risk_reasons,
-        )
+        if paper_enabled and not started:
+            rec = paper_recommend(
+                event_id=event_key, outcome=outcomes[side], model_probability=model_ps[side],
+                decimal_odds=1 / ask, bankroll=bankroll, estimated_cost=cost,
+                max_bet_fraction=cap, direction_match=direction_match, risk_reasons=risk_reasons,
+            )
+        else:
+            rec = recommend(
+                event_id=event_key, outcome=outcomes[side], model_probability=model_ps[side],
+                decimal_odds=1 / ask, bankroll=bankroll,
+                confidence=.75 if probability_ok else .25,
+                spread=float(market["spread"]) if market.get("spread") is not None else None,
+                available_size=float(market.get("liquidity") or 0), estimated_cost=cost,
+                trading_enabled=probability_ok and not started,
+                kelly_scale=risk_config.kelly_scale, max_bet_fraction=cap,
+                min_edge=risk_config.min_edge, min_confidence=risk_config.min_confidence,
+                max_spread=risk_config.max_spread, min_available_size=risk_config.min_available_size,
+                max_depth_fraction=risk_config.max_depth_fraction, risk_reasons=risk_reasons,
+            )
         if rec.action == "BET":
             ledger.commit(event_key, group, rec.stake_fraction)
         reasons = (model.explain(team_a, team_b, scheduled)
@@ -233,6 +279,9 @@ def analyze_sport(sport: str, model: EloModel | NbaModel, evaluation: dict, even
             "probability_plausible": not bool(sanity),
             "schedule_matched": bool(schedule_match and schedule_match.get("market_mapping_status") == "MATCHED"),
             "market_mapping_status": schedule_match.get("market_mapping_status") if schedule_match else "NOT_IN_SCHEDULE",
+            "lineup_status": "未知",
+            "ev_tier": _ev_tier(rec.expected_value),
+            "direction_match": bool(direction_match),
             "reasons": reasons + list(rec.reasons),
         })
         if started:
@@ -279,12 +328,14 @@ def _research_row(sport: str, event: dict, market: dict, scheduled: datetime | N
                   schedule_matches: list[dict] | None = None,
                   risk_config: RiskConfig | None = None,
                   ledger: RiskBudgetLedger | None = None,
-                  group_key: str | None = None) -> dict:
+                  group_key: str | None = None,
+                  lineup_status: str = "未知") -> dict:
     risk_config = risk_config or RiskConfig()
     if ledger is None:
         ledger = RiskBudgetLedger(risk_config, bankroll)
     paper_enabled = _paper_trading_enabled()
     side = max(range(2), key=lambda index: probabilities[index] - prices[index])
+    direction_match = _direction_match(prices, side)
     bid, best_ask = market.get("bestBid"), market.get("bestAsk")
     ask = float(best_ask) if side == 0 and best_ask is not None else (
         1 - float(bid) if side == 1 and bid is not None else prices[side])
@@ -295,18 +346,25 @@ def _research_row(sport: str, event: dict, market: dict, scheduled: datetime | N
     cost = estimate_cost_rate(ask) if estimated_cost is None else estimated_cost
     cap = ledger.cap_for(event_key, group)
     risk_reasons = ledger.exhausted_reasons(event_key, group)
-    rec = recommend(
-        event_id=event_key, outcome=outcomes[side], model_probability=probabilities[side],
-        decimal_odds=1 / ask, bankroll=bankroll,
-        confidence=.75 if (probability_ok or paper_enabled) else .25,
-        spread=float(market["spread"]) if market.get("spread") is not None else None,
-        available_size=float(market.get("liquidity") or 0), estimated_cost=cost,
-        trading_enabled=(probability_ok or paper_enabled) and not started,
-        kelly_scale=risk_config.kelly_scale, max_bet_fraction=cap,
-        min_edge=risk_config.min_edge, min_confidence=risk_config.min_confidence,
-        max_spread=risk_config.max_spread, min_available_size=risk_config.min_available_size,
-        max_depth_fraction=risk_config.max_depth_fraction, risk_reasons=risk_reasons,
-    )
+    if paper_enabled and not started:
+        rec = paper_recommend(
+            event_id=event_key, outcome=outcomes[side], model_probability=probabilities[side],
+            decimal_odds=1 / ask, bankroll=bankroll, estimated_cost=cost,
+            max_bet_fraction=cap, direction_match=direction_match, risk_reasons=risk_reasons,
+        )
+    else:
+        rec = recommend(
+            event_id=event_key, outcome=outcomes[side], model_probability=probabilities[side],
+            decimal_odds=1 / ask, bankroll=bankroll,
+            confidence=.75 if probability_ok else .25,
+            spread=float(market["spread"]) if market.get("spread") is not None else None,
+            available_size=float(market.get("liquidity") or 0), estimated_cost=cost,
+            trading_enabled=probability_ok and not started,
+            kelly_scale=risk_config.kelly_scale, max_bet_fraction=cap,
+            min_edge=risk_config.min_edge, min_confidence=risk_config.min_confidence,
+            max_spread=risk_config.max_spread, min_available_size=risk_config.min_available_size,
+            max_depth_fraction=risk_config.max_depth_fraction, risk_reasons=risk_reasons,
+        )
     if rec.action == "BET":
         ledger.commit(event_key, group, rec.stake_fraction)
     if not probability_ok:
@@ -338,6 +396,9 @@ def _research_row(sport: str, event: dict, market: dict, scheduled: datetime | N
         "probability_plausible": not bool(sanity),
         "schedule_matched": bool(schedule_match and schedule_match.get("market_mapping_status") == "MATCHED"),
         "market_mapping_status": schedule_match.get("market_mapping_status") if schedule_match else "NOT_IN_SCHEDULE",
+        "lineup_status": lineup_status,
+        "ev_tier": _ev_tier(rec.expected_value),
+        "direction_match": bool(direction_match),
         "reasons": reasons + list(rec.reasons),
     })
     if started:
@@ -365,6 +426,7 @@ def analyze_cs2(model: Cs2Model, evaluation: dict, events: list[dict], *,
         probability = model.probability(a, b, roster_a, roster_b)
         known = model.team_games.get(a, 0) >= 10 and model.team_games.get(b, 0) >= 10
         roster_ok = len(roster_a) == len(roster_b) == 5 and _roster_fresh(model.team_last_game, (a, b), now, 60)
+        lineup_status = _lineup_status(roster_a, roster_b, model.team_last_game, (a, b), now, 60)
         probability_ok = bool(evaluation.get("approved_for_probability_use")) and known and roster_ok
         reasons = [
             f"阵容感知胜率：{outcomes[0]} {probability:.1%}，{outcomes[1]} {1-probability:.1%}。",
@@ -375,7 +437,8 @@ def analyze_cs2(model: Cs2Model, evaluation: dict, events: list[dict], *,
                                   [probability, 1-probability], probability_ok=probability_ok,
                                   money_ok=bool(evaluation.get("approved_for_real_money")),
                                   now=now, bankroll=bankroll, reasons=reasons,
-                                  schedule_matches=schedule_matches, risk_config=risk_config, ledger=ledger, group_key=group_key))
+                                  schedule_matches=schedule_matches, risk_config=risk_config, ledger=ledger, group_key=group_key,
+                                  lineup_status=lineup_status))
     return rows
 
 
@@ -403,6 +466,7 @@ def analyze_lol_meta(model: LolMetaModel, evaluation: dict, events: list[dict], 
         probability = series_probability(neutral_game_p, best_of)
         known = model.team_games.get(a, 0) >= 10 and model.team_games.get(b, 0) >= 10
         roster_ok = len(roster_a) == len(roster_b) == 5 and _roster_fresh(model.team_last_game, (a, b), now, 90)
+        lineup_status = _lineup_status(roster_a, roster_b, model.team_last_game, (a, b), now, 90)
         probability_ok = bool(evaluation.get("approved_for_probability_use")) and known and roster_ok
         reasons = [
             f"赛前阵容模型：{outcomes[0]} {probability:.1%}，{outcomes[1]} {1-probability:.1%}（BO{best_of}）。",
@@ -413,7 +477,8 @@ def analyze_lol_meta(model: LolMetaModel, evaluation: dict, events: list[dict], 
                                   [probability, 1-probability], probability_ok=probability_ok,
                                   money_ok=bool(evaluation.get("approved_for_real_money")),
                                   now=now, bankroll=bankroll, reasons=reasons,
-                                  schedule_matches=schedule_matches, risk_config=risk_config, ledger=ledger, group_key=group_key))
+                                  schedule_matches=schedule_matches, risk_config=risk_config, ledger=ledger, group_key=group_key,
+                                  lineup_status=lineup_status))
     return rows
 
 
@@ -571,6 +636,9 @@ def run_all(model_dir: str | Path, output: str | Path, *, now: datetime | None =
         for row in recommendations:
             row["flagged"] = True
         flagged = list(recommendations)
+    paper_daily = _paper_daily_report(
+        recommendations, bankroll, ledger.daily_committed, risk_config.max_daily_risk_fraction,
+    )
     paper_mode = "已开启" if _paper_trading_enabled() else "未开启"
     risk_notes = [
         "NBA、LoL、CS2 分别训练和验收；CBA 已暂停。",
@@ -586,6 +654,7 @@ def run_all(model_dir: str | Path, output: str | Path, *, now: datetime | None =
         "data_incomplete": any(audit["data_incomplete"] for audit in audits.values()),
         "flagged": flagged,
         "flag_threshold": flag_threshold,
+        "paper_daily": paper_daily,
         "risk_notes": risk_notes,
         "model_staleness": model_staleness,
         "risk_status": {
