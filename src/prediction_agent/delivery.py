@@ -229,142 +229,39 @@ def format_daily_report(report: dict[str, Any], report_date: date | None = None)
     def percent(value: Any) -> str:
         return "不可比较" if value is None else f"{float(value):.1%}"
 
-    def price(value: Any) -> str:
-        return "不可用" if value is None else f"{float(value):.3f}"
-
     day = report_date or (date.fromisoformat(report["report_date"]) if report.get("report_date") else date.today())
-    rows = sorted(report.get("recommendations", []), key=lambda row: row.get("action") != "BET")
-    opportunities = sum(row.get("action") == "BET" for row in rows)
-    lines = [f"每日赛事研究｜{day.isoformat()}", "", "【今日总览】"]
-    sport_order = ("nba", "lol", "cs2")
-    statuses = report.get("sport_status", {})
-    for sport in sport_order:
-        sport_rows = [row for row in rows if row.get("sport") == sport]
-        bets = sum(row.get("action") == "BET" for row in sport_rows)
-        status = statuses.get(sport, {})
-        ready = status.get("ready", True)
-        today_markets = status.get("today_markets")
-        suffix = f"｜今日市场 {today_markets} 场" if today_markets is not None else ""
-        lines.append(f"{'✅' if ready else '⚠️'} {_sport_name(sport)}：分析 {len(sport_rows)} 场｜符合策略 {bets} 场{suffix}")
-    other_rows = [row for row in rows if row.get("sport") not in sport_order]
-    if other_rows:
-        bets = sum(row.get("action") == "BET" for row in other_rows)
-        lines.append(f"其他：分析 {len(other_rows)} 场｜符合策略 {bets} 场")
-    lines.append(f"合计：分析 {len(rows)} 场｜符合策略 {opportunities} 场")
-
-    coverage = report.get("schedule_coverage", {})
-    if coverage:
-        expected = sum(value.get("expected", 0) for value in coverage.values())
-        watching = sum(value.get("watching", 0) for value in coverage.values())
-        lines.extend(["", "【赛程覆盖】"])
-        lines.extend(
-            f"{'✅' if float(value.get('coverage', 0)) >= 1 else '⚠️'} {_sport_name(sport)}　"
-            f"预计 {value.get('expected', 0)}｜发现 {value.get('discovered', 0)}｜"
-            f"市场 {value.get('market_matched', 0)}｜监控 {value.get('watching', 0)}"
-            for sport, value in coverage.items()
-        )
-        lines.append(f"合计：预计 {expected} 场｜监控 {watching} 场")
-        if report.get("data_incomplete"):
-            lines.append("🚨 数据不完整：存在未解释的赛事遗漏")
-        for sport, value in coverage.items():
-            if value.get("source_disagreement_warning"):
-                lines.append(f"⚠️ {_sport_name(sport)}：多个赛程源结果不一致，请查看赛程审计。")
-            elif value.get("source_unavailable_warning"):
-                lines.append(f"⚠️ {_sport_name(sport)}：部分赛程源不可用，请查看赛程审计。")
-
-    schedule_matched = sum(bool(row.get("schedule_matched")) for row in rows)
-    market_only = len(rows) - schedule_matched
-    suspicious = sum(not bool(row.get("probability_plausible", True)) for row in rows)
-    if market_only or suspicious:
-        lines.extend(["", "【数据提示】"])
-        if market_only:
-            lines.append(f"• 市场独有 {market_only} 场：仅 Polymarket 出现，未在赛程源确认，可能存在映射或队名不一致。")
-        if suspicious:
-            lines.append(f"• 概率可疑 {suspicious} 场：模型输出处于异常区间，建议复核。")
-
-    flagged_rows = report.get("flagged") or [row for row in rows if row.get("flagged")]
-    if flagged_rows:
-        lines.extend(["", "【需人工复核】"])
-        for index, row in enumerate(flagged_rows, 1):
-            team_a, team_b = _event_team_pair(row)
-            outcome = row.get("outcome")
-            model = row.get("model_probability")
-            market = row.get("market_probability")
-            reasons = _key_reasons(row)
-            lines.extend([
-                "",
-                f"🚩 {index}. {team_a} 对 {team_b}",
-                f"预测方向：{_display_team(outcome)}",
-                f"模型胜率：{_two_sided_probability(model, outcome, team_a, team_b)}",
-                f"市场胜率：{_two_sided_probability(market, outcome, team_a, team_b)}",
-            ])
-            lines.extend(f"• {reason}" for reason in reasons)
-    if not rows:
-        lines.extend(["", "暂无达到策略与风控要求的机会。"])
-
-    for sport in (*sport_order, None):
-        sport_rows = [row for row in rows if row.get("sport") == sport and not row.get("flagged")] if sport is not None else [row for row in other_rows if not row.get("flagged")]
-        if not sport_rows:
-            continue
-        section_name = _sport_name(sport) if sport else "其他"
-        lines.extend(["", f"【{section_name}】"])
-        for index, row in enumerate(sport_rows, 1):
-            is_bet = row.get("action") == "BET"
-            action = "符合策略" if is_bet else "暂不参与"
-            marker = "⭐" if is_bet else "▫️"
-            team_a, team_b = _event_team_pair(row)
-            outcome = row.get("outcome")
-            model = row.get("model_probability")
-            market = row.get("market_probability")
-            reasons = _key_reasons(row)
-            lines.extend([
-                "",
-                f"{marker} {index}. {team_a} 对 {team_b}",
-                f"结论：{action}｜预测方向：{_display_team(outcome)}",
-                f"模型胜率：{_two_sided_probability(model, outcome, team_a, team_b)}",
-                f"市场胜率：{_two_sided_probability(market, outcome, team_a, team_b)}",
-                f"净优势：{percent(row.get('edge'))}｜净期望值：{percent(row.get('expected_value'))}｜可买价：{price(row.get('execution_price'))}",
-            ])
-            if is_bet and row.get("stake") is not None:
-                lines.append(f"模拟下注：{float(row['stake']):.2f} USDC")
-            lines.extend(f"• {reason}" for reason in reasons)
+    rows = report.get("recommendations", [])
+    bets = [row for row in rows if row.get("action") == "BET"]
+    skipped = len(rows) - len(bets)
+    lines = [f"【今日模拟下注】{len(bets)}场"]
+    separator = "━━━━━━━━━━━━━━━━"
+    if bets:
+        lines.append(separator)
+        for index, row in enumerate(bets, 1):
+            event = row.get("event") or row.get("event_id") or "未知赛事"
+            outcome = row.get("outcome") or "-"
+            stake = float(row.get("stake") or 0)
+            lines.append(f"[{index}] {event} | {outcome} | {stake:.2f} USDC")
+            lines.append(
+                f"    EV: {percent(row.get('expected_value'))} | "
+                f"模型: {percent(row.get('model_probability'))} vs 市场: {percent(row.get('market_probability'))}"
+            )
+            lines.append(f"    阵容状态: {row.get('lineup_status') or '未知'}")
+            lines.append(separator)
 
     bankroll = report.get("bankroll_usdc")
-    bankroll_text = f"{float(bankroll):.2f} USDC" if bankroll is not None else "等待当日汇率"
-    paper_summary = report.get("paper_summary") or {}
-    if paper_summary.get("predictions") is not None:
-        by_sport = paper_summary.get("by_sport") or {}
-        lines.extend(["", "【模拟资金】", f"研究本金：{bankroll_text}"])
-        lines.append(f"累计预测 {paper_summary.get('predictions', 0)} 场｜已结算 {paper_summary.get('settled', 0)} 场")
-        for sport, stat in by_sport.items():
-            roi = stat.get("paper_roi")
-            roi_text = f"{roi:.1%}" if isinstance(roi, (int, float)) else "暂无"
-            lines.append(
-                f"{_sport_name(sport)}：模拟利润 {float(stat.get('paper_profit', 0)):.2f} USDC｜ROI {roi_text}"
-            )
-        lines.append("说明：模拟盘仅用于学习与模型迭代，不涉及真实资金。")
+    paper_daily = report.get("paper_daily") or {}
+    remaining = paper_daily.get("remaining_limit")
+    if remaining is None and bankroll is not None:
+        total_stake = sum(float(row.get("stake") or 0) for row in bets)
+        remaining = max(0.0, float(bankroll) * 0.025 - total_stake)
     risk_status = report.get("risk_status") or {}
-    max_bet = risk_status.get("max_bet_fraction", 0.0075)
-    max_daily = risk_status.get("max_daily_risk_fraction", 0.025)
-    max_event = risk_status.get("max_event_risk_fraction", 0.01)
-    max_drawdown = risk_status.get("max_drawdown_fraction", 0.10)
-    daily_committed = risk_status.get("daily_committed_fraction")
-    committed_text = f"｜今日已用 {daily_committed:.2%}" if isinstance(daily_committed, (int, float)) else ""
     drawdown = risk_status.get("current_drawdown")
-    drawdown_text = f"｜当前回撤 {drawdown:.1%}" if isinstance(drawdown, (int, float)) else ""
-    lines.extend([
-        "",
-        "【风控状态】",
-        f"研究本金：{bankroll_text}",
-        f"单次上限 {max_bet:.2%}｜单日上限 {max_daily:.2%}｜单赛事上限 {max_event:.2%}｜回撤 {max_drawdown:.0%} 暂停{committed_text}{drawdown_text}",
-        "仅供研究与模拟记录，不构成投资或下注建议。",
-    ])
-    breaker = risk_status.get("circuit_breaker_reason")
-    if breaker:
-        lines.append(f"🚨 熔断触发：{breaker}")
-    risks = report.get("risk_notes", [])
-    if risks:
-        lines.append("补充提示：" + "；".join(str(x) for x in risks[:2]))
+    lines.append("")
+    lines.append(f"【今日跳过】{skipped}场（不符合EV>5%条件）")
+    drawdown_text = f"{float(drawdown):.1%}" if isinstance(drawdown, (int, float)) else "0.0%"
+    remaining_text = f"{float(remaining):.2f} USDC" if isinstance(remaining, (int, float)) else "0.00 USDC"
+    lines.append(f"【今日累计回撤】{drawdown_text} | 剩余额度: {remaining_text}")
     return "\n".join(lines).strip()
 
 
@@ -393,6 +290,37 @@ def format_paper_betting_summary(summary: dict[str, Any], report_date: str,
             f"ROI {roi_text(stat.get('paper_roi'))}"
         )
     lines.extend(["", "仅用于虚拟投注复盘与模型迭代，不涉及真实资金。"])
+    return "\n".join(lines).strip()
+
+
+def format_attribution_report(attribution: dict[str, Any], report_date: str | None = None) -> str:
+    """Format the weekly cold-start attribution table for Feishu text delivery."""
+    def win_rate_text(value: Any) -> str:
+        return "暂无" if value is None else f"{float(value):.1%}"
+
+    def roi_text(value: Any) -> str:
+        return "暂无" if value is None else f"{float(value):+.1%}"
+
+    day = report_date or date.today().isoformat()
+    lines = [f"【每周归因报告】{day}", "━━━━━━━━━━━━━━━━"]
+    sections = (
+        ("按阵容状态", "by_lineup_status", None),
+        ("按 EV 等级", "by_ev_tier", None),
+        ("按方向一致性", "by_direction_match", None),
+        ("按赛事类型", "by_sport", _sport_name),
+    )
+    for title, key, name_mapper in sections:
+        groups = attribution.get(key) or {}
+        lines.append(f"【{title}】")
+        if not groups:
+            lines.append("暂无结算样本")
+        for name, stat in groups.items():
+            label = name_mapper(name) if name_mapper else str(name)
+            lines.append(
+                f"{label}：胜率 {win_rate_text(stat.get('win_rate'))} | "
+                f"ROI {roi_text(stat.get('roi'))} | 样本 {int(stat.get('bets', 0))} 场"
+            )
+        lines.append("")
     return "\n".join(lines).strip()
 
 

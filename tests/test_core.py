@@ -92,7 +92,7 @@ class CoreTests(unittest.TestCase):
         post = format_daily_post({"report_date": "2026-08-14", "recommendations": []})
         FeishuWebhookClient("https://example.invalid/hook", transport=transport).send_post(post)
         self.assertEqual(calls[0][1]["msg_type"], "post")
-        self.assertEqual(calls[0][1]["content"]["post"]["zh_cn"]["title"], "每日赛事研究｜2026-08-14")
+        self.assertEqual(calls[0][1]["content"]["post"]["zh_cn"]["title"], "【今日模拟下注】0场")
 
     def test_feishu_rejects_corrupted_rich_post(self):
         client = FeishuWebhookClient("https://example.invalid/hook", transport=lambda *_args, **_kwargs: {"code": 0})
@@ -101,17 +101,25 @@ class CoreTests(unittest.TestCase):
 
     def test_daily_report_supports_no_bet(self):
         message = format_daily_report({"recommendations": []})
-        self.assertIn("暂无达到策略与风控要求的机会", message)
+        self.assertIn("【今日模拟下注】0场", message)
+        self.assertIn("【今日跳过】0场", message)
         self.assertNotIn("NO BET", message)
 
     def test_daily_report_highlights_and_sorts_bets(self):
-        message = format_daily_report({"bankroll_usdc": 1100, "recommendations": [
-            {"event": "ordinary", "action": "NO_BET"},
-            {"event": "opportunity", "action": "BET"},
-        ]})
-        self.assertLess(message.index("opportunity"), message.index("ordinary"))
-        self.assertIn("符合策略", message)
-        self.assertIn("模型胜率", message)
+        message = format_daily_report({
+            "bankroll_usdc": 1100,
+            "recommendations": [
+                {"event": "ordinary", "action": "NO_BET"},
+                {"event": "opportunity", "action": "BET", "stake": 5.0,
+                 "model_probability": .6, "market_probability": .55,
+                 "expected_value": .08, "lineup_status": "完整"},
+            ],
+        })
+        self.assertIn("opportunity", message)
+        self.assertNotIn("ordinary", message)
+        self.assertIn("【今日模拟下注】1场", message)
+        self.assertIn("EV: 8.0%", message)
+        self.assertIn("阵容状态: 完整", message)
 
 
     def test_event_name_strips_team_region_suffix(self):
