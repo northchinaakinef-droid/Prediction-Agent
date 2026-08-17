@@ -71,6 +71,26 @@ class LiveRuntimeTests(unittest.TestCase):
             supervisor = LiveSupervisor(root=root)
             self.assertEqual(supervisor._report(), {})
 
+    def test_yesterdays_report_can_back_overnight_postmatch_review(self):
+        now = datetime.now(timezone.utc)
+        zone = ZoneInfo("Asia/Singapore")
+        yesterday = (datetime.now(zone).date() - timedelta(days=1)).isoformat()
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "reports").mkdir()
+            (root / "reports" / "daily.json").write_text(json.dumps({
+                "report_date": yesterday,
+                "generated_at": now.isoformat(),
+                "recommendations": [{
+                    "sport": "lol", "event": "FlyQuest vs Cloud9", "outcome": "Cloud9",
+                    "model_probability": .647,
+                }],
+            }), encoding="utf-8")
+            supervisor = LiveSupervisor(root=root)
+            report = supervisor._report()
+        self.assertEqual(report["report_date"], yesterday)
+        self.assertEqual(report["recommendations"][0]["outcome"], "Cloud9")
+
     def test_lol_post_draft_probability_does_not_require_in_game_fields(self):
         state = LiveState(
             "draft", "g1", "lol", datetime.now(timezone.utc), "LIVE", "T1", "Gen.G",

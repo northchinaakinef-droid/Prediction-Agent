@@ -98,6 +98,32 @@ def _paper_bet_profit(stake, execution_price, won):
     return shares * int(bool(won)) - stake - estimate_cost(execution, stake)
 
 
+def _attribution_ev_tier(value: Any) -> str | None:
+    """Compute the paper-betting EV tier from an expected_value."""
+    if value is None:
+        return None
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return None
+    if value > 0.15:
+        return "高"
+    if value > 0.05:
+        return "中"
+    return "低"
+
+
+def _attribution_direction(market_probability: Any) -> int | None:
+    """Derive direction_match from the chosen side's stored market probability."""
+    if market_probability is None:
+        return None
+    try:
+        market_probability = float(market_probability)
+    except (TypeError, ValueError):
+        return None
+    return int(market_probability >= 0.5)
+
+
 def _migrate_predictions(connection: sqlite3.Connection) -> None:
     columns = {row[1] for row in connection.execute("PRAGMA table_info(predictions)")}
     for column, definition in (
@@ -132,7 +158,11 @@ def record_report(path: str | Path, report: dict[str, Any]) -> dict[str, int | s
         if new_run:
             for row in report.get("recommendations", []):
                 prediction_id = _id(run_id, row.get("sport"), row.get("event_id"), row.get("outcome"))
+                lineup_status = row.get("lineup_status") or "未知"
+                ev_tier = row.get("ev_tier") or _attribution_ev_tier(row.get("expected_value")) or "未知"
                 direction_match = row.get("direction_match")
+                if direction_match is None:
+                    direction_match = _attribution_direction(row.get("market_probability"))
                 cursor = connection.execute(
                     """INSERT OR IGNORE INTO predictions
                     (prediction_id, run_id, generated_at, sport, event_id, event,
@@ -150,7 +180,7 @@ def record_report(path: str | Path, report: dict[str, Any]) -> dict[str, int | s
                      str(row.get("action", "NO_BET")), float(row.get("stake") or 0),
                      int(bool(row.get("probability_eligible"))),
                      int(bool(row.get("real_money_approved"))), int(bool(row.get("market_started"))),
-                     row.get("lineup_status"), row.get("ev_tier"),
+                     lineup_status, ev_tier,
                      int(bool(direction_match)) if direction_match is not None else None,
                      None, None,
                      json.dumps(row, ensure_ascii=False)),
@@ -396,14 +426,14 @@ def attribution(path: str | Path, *, since: str | None = None) -> dict[str, Any]
     """Group settled paper bets by the new cold-start attribution fields."""
     target = Path(path)
     empty = {"by_lineup_status": {}, "by_ev_tier": {}, "by_direction_match": {},
-             "by_sport": {}, "sample_count": 0}
+             "by_sport": {}, "by_data_quality": {}, "sample_count": 0,
+             "legacy_sample_count": 0, "total_sample_count": 0}
     if not target.exists():
         return empty
     with closing(sqlite3.connect(target)) as connection:
         connection.executescript(SCHEMA)
         _migrate_predictions(connection)
-        sql = """SELECT p.sport, COALESCE(p.lineup_status, '未知') AS lineup_status,
-                        COALESCE(p.ev_tier, '未知') AS ev_tier, p.direction_match,
+        sql = """SELECT p.sport, p.lineup_status, p.ev_tier, p.direction_match,
                         p.outcome, p.action, p.stake, p.execution_price,
                         COALESCE(p.settled_winner, s.winner) AS winner
                  FROM predictions p JOIN settlements s
@@ -442,25 +472,31 @@ def attribution(path: str | Path, *, since: str | None = None) -> dict[str, Any]
     by_ev: dict[str, list[dict[str, Any]]] = {}
     by_dir: dict[str, list[dict[str, Any]]] = {}
     by_sport: dict[str, list[dict[str, Any]]] = {}
+    complete_items: list[dict[str, Any]] = []
+    legacy_items: list[dict[str, Any]] = []
     for row in rows:
         sport = str(row[0])
-        lineup = str(row[1] or "未知")
-        ev_tier = str(row[2] or "未知")
+        lineup = row[1]
+        ev_tier = row[2]
         raw_dir = row[3]
-        if raw_dir in (1, True):
-            dir_key = "一致"
-        elif raw_dir in (0, False):
-            dir_key = "相反"
-        else:
-            dir_key = "未知"
         item = {
             "outcome": row[4],
             "stake": row[6],
             "execution_price": row[7],
             "winner": row[8],
         }
-        by_lineup.setdefault(lineup, []).append(item)
-        by_ev.setdefault(ev_tier, []).append(item)
+        if lineup is None and ev_tier is None and raw_dir is None:
+            legacy_items.append(item)
+            continue
+        complete_items.append(item)
+        if raw_dir in (1, True):
+            dir_key = "一致"
+        elif raw_dir in (0, False):
+            dir_key = "相反"
+        else:
+            dir_key = "未知"
+        by_lineup.setdefault(str(lineup or "未知"), []).append(item)
+        by_ev.setdefault(str(ev_tier or "未知"), []).append(item)
         by_dir.setdefault(dir_key, []).append(item)
         by_sport.setdefault(sport, []).append(item)
 
@@ -469,7 +505,13 @@ def attribution(path: str | Path, *, since: str | None = None) -> dict[str, Any]
         "by_ev_tier": {key: stats(value) for key, value in by_ev.items()},
         "by_direction_match": {key: stats(value) for key, value in by_dir.items()},
         "by_sport": {key: stats(value) for key, value in by_sport.items()},
-        "sample_count": len(rows),
+        "by_data_quality": {
+            "完整归因字段": stats(complete_items),
+            "历史数据（字段缺失）": stats(legacy_items),
+        },
+        "sample_count": len(complete_items),
+        "legacy_sample_count": len(legacy_items),
+        "total_sample_count": len(rows),
     }
 
 
