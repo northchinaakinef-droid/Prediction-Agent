@@ -5,8 +5,8 @@ from unittest.mock import patch
 
 from prediction_agent.providers.live_data import (
     Bo3Cs2Provider, DataSourceUnavailable, EspnNbaProvider, GridOpenAccessProvider,
-    LeaguepediaDraftProvider, NbaBoxscoreProvider, PandaScoreProvider, SportSrcNbaProvider,
-    TheSportsDbNbaProvider,
+    LeaguepediaDraftProvider, NbaBoxscoreProvider, PandaScoreProvider, RiotEsportsProvider,
+    SportSrcNbaProvider, TheSportsDbNbaProvider,
 )
 
 
@@ -34,6 +34,23 @@ class LiveDataProviderTests(unittest.TestCase):
         with patch.dict(os.environ, {}, clear=True):
             with self.assertRaisesRegex(DataSourceUnavailable, "PANDASCORE_TOKEN"):
                 PandaScoreProvider(token=None).live("cs2")
+
+    def test_riot_esports_rejects_standard_riot_api_key_without_network(self):
+        with patch("prediction_agent.providers.live_data._get_json") as get_json:
+            with self.assertRaisesRegex(DataSourceUnavailable, "RGAPI"):
+                RiotEsportsProvider(api_key="RGAPI-daa2a710-e02f-4a8f-b070-df970c4f990b").league_ids([])
+        get_json.assert_not_called()
+
+    @patch("prediction_agent.providers.live_data._get_json")
+    def test_riot_esports_uses_x_api_key_header_for_esports_key(self, get_json):
+        get_json.return_value = {"data": {"leagues": [
+            {"id": "1", "name": "LCK"},
+            {"id": "2", "name": "LPL"},
+        ]}}
+        provider = RiotEsportsProvider(api_key="esports-style-key")
+        self.assertEqual(provider.league_ids(["LCK"]), ["1"])
+        get_json.assert_called_once()
+        self.assertEqual(get_json.call_args.kwargs["headers"], {"x-api-key": "esports-style-key"})
 
     @patch("prediction_agent.providers.live_data._get_json")
     def test_leaguepedia_parses_completed_draft(self, get_json):

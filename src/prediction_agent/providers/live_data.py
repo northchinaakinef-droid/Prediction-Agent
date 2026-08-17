@@ -768,12 +768,19 @@ class RiotEsportsProvider:
     api = "https://esports-api.lolesports.com/persisted/gw"
     feed = "https://feed.lolesports.com/livestats/v1"
 
+    standard_key_prefix = "RGAPI-"
+
     def __init__(self, api_key: str | None = None):
         self.api_key = api_key or os.getenv("LOLESPORTS_API_KEY")
 
     def _headers(self) -> dict[str, str]:
         if not self.api_key:
             raise DataSourceUnavailable("LOLESPORTS_API_KEY is not configured")
+        if str(self.api_key).strip().upper().startswith(self.standard_key_prefix):
+            raise DataSourceUnavailable(
+                "LOLESPORTS_API_KEY 是标准 Riot API key（RGAPI-），不能用于 LoL Esports feed；"
+                "riot_esports 已降级为可选，LoL BP 由 Leaguepedia 接管"
+            )
         return {"x-api-key": self.api_key}
 
     def league_ids(self, target_names: list[str]) -> list[str]:
