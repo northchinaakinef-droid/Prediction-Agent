@@ -257,8 +257,14 @@ def format_daily_report(report: dict[str, Any], report_date: date | None = None)
         remaining = max(0.0, float(bankroll) * 0.025 - total_stake)
     risk_status = report.get("risk_status") or {}
     drawdown = risk_status.get("current_drawdown")
+    skip_parts = []
+    for sport, stat in (paper_daily.get("by_sport") or {}).items():
+        skip_count = int(stat.get("skipped") or 0)
+        if skip_count:
+            skip_parts.append(f"{_sport_name(sport)} {skip_count}场")
+    skip_detail = "｜".join(skip_parts) if skip_parts else "无分项明细"
     lines.append("")
-    lines.append(f"【今日跳过】{skipped}场（不符合EV>5%条件）")
+    lines.append(f"【今日跳过】{skipped}场（{skip_detail}；EV>5%、方向一致性或风险预算未达标）")
     drawdown_text = f"{float(drawdown):.1%}" if isinstance(drawdown, (int, float)) else "0.0%"
     remaining_text = f"{float(remaining):.2f} USDC" if isinstance(remaining, (int, float)) else "0.00 USDC"
     lines.append(f"【今日累计回撤】{drawdown_text} | 剩余额度: {remaining_text}")
@@ -304,6 +310,7 @@ def format_attribution_report(attribution: dict[str, Any], report_date: str | No
     day = report_date or date.today().isoformat()
     lines = [f"【每周归因报告】{day}", "━━━━━━━━━━━━━━━━"]
     sections = (
+        ("按数据完整度", "by_data_quality", None),
         ("按阵容状态", "by_lineup_status", None),
         ("按 EV 等级", "by_ev_tier", None),
         ("按方向一致性", "by_direction_match", None),

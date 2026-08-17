@@ -134,12 +134,22 @@ def _paper_daily_report(rows: list[dict], bankroll: float,
                         committed_fraction: float, max_daily_risk_fraction: float) -> dict:
     bets = [row for row in rows if row.get("action") == "BET"]
     total_stake = sum(float(row.get("stake") or 0) for row in bets)
+    by_sport: dict[str, dict[str, float | int]] = {}
+    for row in rows:
+        sport = str(row.get("sport") or "unknown")
+        stat = by_sport.setdefault(sport, {"bets": 0, "skipped": 0, "stake": 0.0})
+        if row.get("action") == "BET":
+            stat["bets"] = int(stat["bets"]) + 1
+            stat["stake"] = float(stat["stake"]) + float(row.get("stake") or 0)
+        else:
+            stat["skipped"] = int(stat["skipped"]) + 1
     return {
         "bet_count": len(bets),
         "skipped_count": len(rows) - len(bets),
         "total_stake": total_stake,
         "committed_fraction": committed_fraction,
         "remaining_limit": max(0.0, bankroll * (max_daily_risk_fraction - committed_fraction)),
+        "by_sport": by_sport,
     }
 
 def _find_schedule_match(schedule_matches: list[dict] | None, sport: str,

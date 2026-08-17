@@ -80,8 +80,24 @@ class LiveSupervisor:
             return {}
         report = json.loads(path.read_text(encoding="utf-8"))
         zone = ZoneInfo(os.getenv("REPORT_TIMEZONE", "Asia/Singapore"))
-        if report.get("report_date") != datetime.now(zone).date().isoformat():
+        local_today = datetime.now(zone).date()
+        # A pre-match report is generated on the Asia/Singapore calendar day and
+        # can cover matches that start after midnight local time.  Post-match
+        # reviews for those matches therefore still need yesterday's report even
+        # though today's report has not been generated yet.
+        valid_dates = {local_today.isoformat(), (local_today - timedelta(days=1)).isoformat()}
+        if report.get("report_date") not in valid_dates:
             return {}
+        generated_at = report.get("generated_at")
+        if generated_at:
+            try:
+                generated_dt = datetime.fromisoformat(str(generated_at).replace("Z", "+00:00"))
+                if generated_dt.tzinfo is None:
+                    generated_dt = generated_dt.replace(tzinfo=timezone.utc)
+                if (datetime.now(timezone.utc) - generated_dt.astimezone(timezone.utc)) > timedelta(hours=48):
+                    return {}
+            except ValueError:
+                pass
         return report
 
     def _emit_once(self, alert: LiveAlert) -> bool:
