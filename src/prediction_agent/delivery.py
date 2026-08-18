@@ -249,6 +249,22 @@ def format_daily_report(report: dict[str, Any], report_date: date | None = None)
             lines.append(f"    阵容状态: {row.get('lineup_status') or '未知'}")
             lines.append(separator)
 
+    skipped_rows = [row for row in rows if row.get("action") != "BET"]
+    if skipped_rows:
+        lines.append("")
+        lines.append(f"【今日跳过明细】{len(skipped_rows)}场")
+        for index, row in enumerate(skipped_rows, 1):
+            event = _event_name(row.get("event") or row.get("event_id") or "未知赛事")
+            outcome = row.get("outcome") or "-"
+            ev = percent(row.get("expected_value"))
+            model = percent(row.get("model_probability"))
+            market = percent(row.get("market_probability"))
+            reasons = _key_reasons(row, limit=3)
+            reason_text = "；".join(reasons) if reasons else "无明确拒绝原因"
+            lines.append(f"[{index}] {event} | {outcome} | EV: {ev} | 模型: {model} vs 市场: {market}")
+            lines.append(f"    阵容: {row.get('lineup_status') or '未知'} | "
+                         f"赛程匹配: {row.get('market_mapping_status') or 'NOT_IN_SCHEDULE'} | "
+                         f"卡住条件: {reason_text}")
     bankroll = report.get("bankroll_usdc")
     paper_daily = report.get("paper_daily") or {}
     remaining = paper_daily.get("remaining_limit")
@@ -257,8 +273,14 @@ def format_daily_report(report: dict[str, Any], report_date: date | None = None)
         remaining = max(0.0, float(bankroll) * 0.025 - total_stake)
     risk_status = report.get("risk_status") or {}
     drawdown = risk_status.get("current_drawdown")
+    skip_parts = []
+    for sport, stat in (paper_daily.get("by_sport") or {}).items():
+        skip_count = int(stat.get("skipped") or 0)
+        if skip_count:
+            skip_parts.append(f"{_sport_name(sport)} {skip_count}场")
+    skip_detail = "｜".join(skip_parts) if skip_parts else "无分项明细"
     lines.append("")
-    lines.append(f"【今日跳过】{skipped}场（不符合EV>5%条件）")
+    lines.append(f"【今日跳过】{skipped}场（{skip_detail}；EV>5%、方向一致性或风险预算未达标）")
     drawdown_text = f"{float(drawdown):.1%}" if isinstance(drawdown, (int, float)) else "0.0%"
     remaining_text = f"{float(remaining):.2f} USDC" if isinstance(remaining, (int, float)) else "0.00 USDC"
     lines.append(f"【今日累计回撤】{drawdown_text} | 剩余额度: {remaining_text}")
