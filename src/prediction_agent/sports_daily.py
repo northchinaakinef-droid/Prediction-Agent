@@ -524,8 +524,18 @@ def run_all(model_dir: str | Path, output: str | Path, *, now: datetime | None =
     except Exception:
         logging.exception("run_all: unable to compute drawdown from paper_store")
         drawdown = 0.0
-    if drawdown >= risk_config.max_drawdown_fraction:
-        ledger.breaker_reason = "account drawdown circuit breaker triggered"
+    ledger.paper_mode = _paper_trading_enabled()
+    if drawdown >= risk_config.drawdown_circuit_fraction:
+        if ledger.paper_mode:
+            ledger.drawdown_level = "warn"
+            ledger.warn_reason = ("virtual account drawdown reached circuit threshold; "
+                                  "paper mode halves exposure instead of pausing")
+        else:
+            ledger.drawdown_level = "circuit"
+            ledger.breaker_reason = "account drawdown circuit breaker triggered"
+    elif drawdown >= risk_config.drawdown_warn_fraction:
+        ledger.drawdown_level = "warn"
+        ledger.warn_reason = "account drawdown warn threshold triggered"
     recommendations, statuses = [], {}
     client = PolymarketClient(timeout=30)
     market_events = {sport: client.all_events_by_tag(tag, page_size=100) for sport, tag in TAGS.items()}
@@ -657,6 +667,8 @@ def run_all(model_dir: str | Path, output: str | Path, *, now: datetime | None =
     ]
     if ledger.breaker_reason:
         risk_notes.append(ledger.breaker_reason)
+    if ledger.warn_reason:
+        risk_notes.append(ledger.warn_reason)
     report = {
         "report_date": report_day.isoformat(), "generated_at": now.isoformat(),
         "bankroll_usdc": bankroll, "recommendations": recommendations, "sport_status": statuses,
@@ -673,6 +685,12 @@ def run_all(model_dir: str | Path, output: str | Path, *, now: datetime | None =
             "max_daily_risk_fraction": risk_config.max_daily_risk_fraction,
             "max_event_risk_fraction": risk_config.max_event_risk_fraction,
             "max_drawdown_fraction": risk_config.max_drawdown_fraction,
+            "drawdown_warn_fraction": risk_config.drawdown_warn_fraction,
+            "drawdown_circuit_fraction": risk_config.drawdown_circuit_fraction,
+            "drawdown_level": ledger.drawdown_level,
+            "paper_mode_exception": bool(ledger.paper_mode and ledger.drawdown_level == "warn"
+                                         and drawdown >= risk_config.drawdown_circuit_fraction),
+            "warn_reason": ledger.warn_reason,
             "daily_committed_fraction": ledger.daily_committed,
             "current_drawdown": drawdown,
             "circuit_breaker": ledger.breaker_reason is not None,

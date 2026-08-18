@@ -41,6 +41,8 @@ class RiskConfig:
     max_daily_risk_fraction: float = 0.025
     max_event_risk_fraction: float = 0.01
     max_drawdown_fraction: float = 0.10
+    drawdown_warn_fraction: float = 0.10
+    drawdown_circuit_fraction: float = 0.15
     max_correlation_group_fraction: float = 0.05
     max_depth_fraction: float = 0.10
     min_edge: float = 0.025
@@ -65,6 +67,8 @@ class RiskConfig:
             max_daily_risk_fraction=read("MAX_DAILY_RISK_FRACTION", 0.025),
             max_event_risk_fraction=read("MAX_EVENT_RISK_FRACTION", 0.01),
             max_drawdown_fraction=read("MAX_DRAWDOWN_FRACTION", 0.10),
+            drawdown_warn_fraction=read("DRAWDOWN_WARN_FRACTION", 0.10),
+            drawdown_circuit_fraction=read("DRAWDOWN_CIRCUIT_FRACTION", 0.15),
             max_correlation_group_fraction=read("MAX_CORRELATION_GROUP_FRACTION", 0.05),
             max_depth_fraction=read("MAX_DEPTH_FRACTION", 0.10),
             min_edge=read("MIN_EDGE", 0.025),
@@ -88,6 +92,9 @@ class RiskBudgetLedger:
     event_committed: dict[str, float] = field(default_factory=dict)
     group_committed: dict[str, float] = field(default_factory=dict)
     breaker_reason: str | None = None
+    drawdown_level: str = "normal"
+    paper_mode: bool = True
+    warn_reason: str | None = None
 
     def load_prior(self, path: str | None, report_date: str) -> None:
         if not path:
@@ -121,12 +128,23 @@ class RiskBudgetLedger:
         cap = min(self.config.max_bet_fraction, self.remaining_daily(), self.remaining_event(event_id))
         if group_key:
             cap = min(cap, self.remaining_group(group_key))
+        cap = max(0.0, cap)
+        if self.drawdown_level == "warn":
+            cap *= 0.5
+        elif self.drawdown_level == "circuit":
+            cap = 0.0 if not self.paper_mode else cap * 0.5
         return max(0.0, cap)
 
     def exhausted_reasons(self, event_id: str, group_key: str | None = None) -> tuple[str, ...]:
         reasons: list[str] = []
         if self.breaker_reason:
             reasons.append(self.breaker_reason)
+        if self.warn_reason:
+            reasons.append(self.warn_reason)
+        elif self.drawdown_level == "warn":
+            reasons.append("account drawdown warn threshold triggered")
+        elif self.drawdown_level == "circuit" and self.paper_mode:
+            reasons.append("virtual account drawdown reached circuit threshold; paper mode halves exposure")
         if self.remaining_daily() <= 0:
             reasons.append("daily risk budget exhausted")
         if self.remaining_event(event_id) <= 0:
@@ -274,10 +292,10 @@ def paper_recommend(
     ev = model_probability * decimal_odds - 1 - max(0.0, estimated_cost)
     if direction_match is None:
         direction_match = market_probability >= 0.5
-    if max_bet_fraction < PAPER_STAKE_FRACTION:
+    if max_bet_fraction <= 0:
         stake_fraction = 0.0
     else:
-        stake_fraction = PAPER_STAKE_FRACTION
+        stake_fraction = min(PAPER_STAKE_FRACTION, max_bet_fraction)
     reasons: list[str] = [
         f"paper edge={edge:.2%}",
         f"paper cost-adjusted edge={net_edge:.2%}",
@@ -285,8 +303,8 @@ def paper_recommend(
         "paper mode fixed 0.5% stake",
     ]
     reasons.extend(risk_reasons)
-    if max_bet_fraction < PAPER_STAKE_FRACTION:
-        reasons.append("insufficient remaining risk budget for fixed 0.5% paper stake")
+    if 0 < stake_fraction < PAPER_STAKE_FRACTION:
+        reasons.append("paper stake reduced to available risk budget")
     if not direction_match:
         reasons.append("prediction direction opposes market favorite")
     if net_edge <= PAPER_MIN_EDGE:

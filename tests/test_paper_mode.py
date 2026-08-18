@@ -36,6 +36,17 @@ class PaperModeTests(unittest.TestCase):
         self.assertAlmostEqual(rec.stake_fraction, 0.005)
         self.assertEqual(rec.decision_probability, 0.60)
 
+    def test_paper_recommend_reduces_stake_to_available_cap(self):
+        rec = paper_recommend(
+            event_id="e", outcome="A", model_probability=0.60,
+            decimal_odds=1 / 0.55, bankroll=1000, estimated_cost=0.01,
+            direction_match=True, max_bet_fraction=0.00375,
+        )
+        self.assertEqual(rec.action, "BET")
+        self.assertAlmostEqual(rec.stake, 3.75)
+        self.assertAlmostEqual(rec.stake_fraction, 0.00375)
+        self.assertIn("paper stake reduced to available risk budget", rec.reasons)
+
     def test_paper_recommend_rejects_opposite_direction_unless_ev_over_10_percent(self):
         rec = paper_recommend(
             event_id="e", outcome="A", model_probability=0.43,
