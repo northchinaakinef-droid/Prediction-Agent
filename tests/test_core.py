@@ -105,18 +105,21 @@ class CoreTests(unittest.TestCase):
         self.assertIn("【今日跳过】0场", message)
         self.assertNotIn("NO BET", message)
 
-    def test_daily_report_highlights_and_sorts_bets(self):
+    def test_daily_report_highlights_bets_and_lists_skipped_details(self):
         message = format_daily_report({
             "bankroll_usdc": 1100,
             "recommendations": [
-                {"event": "ordinary", "action": "NO_BET"},
+                {"event": "ordinary", "action": "NO_BET", "reasons": ["paper net EV below 5%"]},
                 {"event": "opportunity", "action": "BET", "stake": 5.0,
                  "model_probability": .6, "market_probability": .55,
                  "expected_value": .08, "lineup_status": "完整"},
             ],
         })
         self.assertIn("opportunity", message)
-        self.assertNotIn("ordinary", message)
+        self.assertIn("ordinary", message)
+        self.assertIn("【今日跳过明细】1场", message)
+        self.assertIn("EV: 不可比较", message)
+        self.assertIn("卡住条件", message)
         self.assertIn("【今日模拟下注】1场", message)
         self.assertIn("EV: 8.0%", message)
         self.assertIn("阵容状态: 完整", message)
