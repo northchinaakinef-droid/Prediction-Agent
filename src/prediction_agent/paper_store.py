@@ -7,6 +7,7 @@ import logging
 import os
 import sqlite3
 import time
+from datetime import datetime, timezone
 from contextlib import closing
 from pathlib import Path
 from typing import Any
@@ -47,7 +48,8 @@ CREATE TABLE IF NOT EXISTS predictions (
     direction_match INTEGER,
     settled_profit REAL,
     settled_winner TEXT,
-    payload_json TEXT NOT NULL
+    payload_json TEXT NOT NULL,
+    archived INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS predictions_event_idx ON predictions(sport, event_id, generated_at);
 CREATE TABLE IF NOT EXISTS post_match_reviews (
@@ -80,6 +82,16 @@ CREATE TABLE IF NOT EXISTS paper_summary_sends (
 CREATE TABLE IF NOT EXISTS weekly_attribution_sends (
     report_week TEXT PRIMARY KEY,
     sent_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS account_events (
+    event_id TEXT PRIMARY KEY,
+    action TEXT NOT NULL,
+    occurred_at TEXT NOT NULL,
+    reason TEXT,
+    equity_before REAL,
+    drawdown_before REAL,
+    bankroll REAL,
+    payload_json TEXT NOT NULL
 );
 """
 
@@ -134,6 +146,7 @@ def _migrate_predictions(connection: sqlite3.Connection) -> None:
         ("direction_match", "direction_match INTEGER"),
         ("settled_profit", "settled_profit REAL"),
         ("settled_winner", "settled_winner TEXT"),
+        ("archived", "archived INTEGER NOT NULL DEFAULT 0"),
     ):
         if column not in columns:
             connection.execute(f"ALTER TABLE predictions ADD COLUMN {definition}")
@@ -411,7 +424,8 @@ def current_drawdown(path: str | Path, bankroll: float) -> float:
             """SELECT p.stake, p.execution_price, p.outcome, s.winner, s.settled_at
                FROM predictions p JOIN settlements s
                  ON p.sport=s.sport AND p.event_id=s.event_id
-               WHERE p.action='BET' AND p.stake > 0 AND p.execution_price IS NOT NULL
+               WHERE p.action='BET' AND p.archived=0 AND p.stake > 0
+                 AND p.execution_price IS NOT NULL
                ORDER BY s.settled_at"""
         ).fetchall()
     equity = peak = float(bankroll)
@@ -420,6 +434,60 @@ def current_drawdown(path: str | Path, bankroll: float) -> float:
         equity += pnl
         peak = max(peak, equity)
     return (peak - equity) / peak if peak > 0 else 0.0
+
+
+def reset_paper_account(path: str | Path, bankroll: float, reason: str = "manual_reset") -> dict[str, Any]:
+    """Archive all existing BET rows and record a RESET account event.
+
+    Reset does not delete history.  Every existing BET prediction is marked
+    ``archived=1``, a RESET event captures the pre-reset equity and drawdown,
+    and ``current_drawdown()`` starts over from the new bankroll baseline.
+    """
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    reset_at = datetime.now(timezone.utc).isoformat()
+    reset_id = _id("reset", reset_at, reason)
+    with closing(sqlite3.connect(target)) as connection:
+        connection.executescript(SCHEMA)
+        _migrate_predictions(connection)
+        rows = connection.execute(
+            """SELECT p.stake, p.execution_price, p.outcome, s.winner, s.settled_at
+               FROM predictions p JOIN settlements s
+                 ON p.sport=s.sport AND p.event_id=s.event_id
+               WHERE p.action='BET' AND p.archived=0 AND p.stake > 0
+                 AND p.execution_price IS NOT NULL
+               ORDER BY s.settled_at"""
+        ).fetchall()
+        equity = peak = float(bankroll)
+        for stake, execution, outcome, winner, _ in rows:
+            won = str(outcome or "").strip() == str(winner or "").strip()
+            equity += _paper_bet_profit(stake, execution, won)
+            peak = max(peak, equity)
+        equity_before = equity
+        drawdown_before = (peak - equity) / peak if peak > 0 else 0.0
+        archived = connection.execute(
+            "UPDATE predictions SET archived=1 WHERE action='BET'"
+        ).rowcount
+        payload = {
+            "reset_at": reset_at,
+            "reason": reason,
+            "bankroll": float(bankroll),
+            "equity_before": equity_before,
+            "drawdown_before": drawdown_before,
+            "archived_bet_rows": int(archived),
+        }
+        connection.execute(
+            """INSERT OR IGNORE INTO account_events
+               (event_id, action, occurred_at, reason, equity_before, drawdown_before,
+                bankroll, payload_json)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (reset_id, "RESET", reset_at, reason, equity_before, drawdown_before,
+             float(bankroll), json.dumps(payload, ensure_ascii=False)),
+        )
+        connection.commit()
+    return {"reset_id": reset_id, "reset_at": reset_at, "reason": reason,
+            "equity_before": equity_before, "drawdown_before": drawdown_before,
+            "archived_bet_rows": int(archived), "bankroll": float(bankroll)}
 
 
 def attribution(path: str | Path, *, since: str | None = None) -> dict[str, Any]:

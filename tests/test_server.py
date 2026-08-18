@@ -93,6 +93,32 @@ class ServerDeliveryTests(unittest.TestCase):
             self.assertGreater(target, now)
             self.assertEqual(target.minute, 45)
 
+    def test_reset_paper_account_endpoint_requires_token(self):
+        server = load_server_module()
+        with patch.dict(os.environ, {}, clear=True):
+            with self.assertRaisesRegex(RuntimeError, "RESET_TOKEN"):
+                server._reset_paper_account("manual_reset")
+
+    def test_reset_paper_account_endpoint_resets_and_notifies(self):
+        server = load_server_module()
+        fake_result = {
+            "reset_id": "reset-1",
+            "reset_at": "2026-08-18T00:00:00+00:00",
+            "drawdown_before": 0.111,
+            "reason": "manual_reset",
+            "equity_before": 889.0,
+            "bankroll": 1000.0,
+        }
+        with patch.dict(os.environ, {
+            "RESET_TOKEN": "tok", "PAPER_DB_PATH": "/tmp/paper.db", "BANKROLL_USDC": "1000",
+        }, clear=False), patch.object(server, "reset_paper_account", return_value=fake_result) as reset,              patch.object(server, "_send_message") as send:
+            result = server._reset_paper_account("manual_reset")
+        reset.assert_called_once()
+        send.assert_called_once()
+        self.assertIn("【虚拟账户重置】", send.call_args[0][0])
+        self.assertIn("重置前回撤：11.1%", send.call_args[0][0])
+        self.assertEqual(result, fake_result)
+
     def test_run_paper_summary_sends_once_per_report_date(self):
         server = load_server_module()
         with tempfile.TemporaryDirectory() as directory:
