@@ -103,6 +103,8 @@ class CoreTests(unittest.TestCase):
         message = format_daily_report({"recommendations": []})
         self.assertIn("【今日模拟下注】0场", message)
         self.assertIn("【今日跳过】0场", message)
+        self.assertIn("【虚拟账户历史回撤】0.0%", message)
+        self.assertIn("【风控状态】正常", message)
         self.assertNotIn("NO BET", message)
 
     def test_daily_report_highlights_bets_and_lists_skipped_details(self):
@@ -123,6 +125,32 @@ class CoreTests(unittest.TestCase):
         self.assertIn("【今日模拟下注】1场", message)
         self.assertIn("EV: 8.0%", message)
         self.assertIn("阵容状态: 完整", message)
+
+    def test_daily_report_circuit_breaker_uses_breaker_label(self):
+        message = format_daily_report({
+            "bankroll_usdc": 1000,
+            "risk_status": {"circuit_breaker": True, "current_drawdown": 0.111},
+            "recommendations": [
+                {"event": "frozen", "action": "NO_BET", "outcome": "A",
+                 "expected_value": 0.02, "model_probability": 0.55,
+                 "market_probability": 0.52, "reasons": ["paper net EV below 5%"]},
+            ],
+        })
+        self.assertIn("【今日跳过】1场（账户熔断（全部暂停））", message)
+        self.assertIn("账户熔断（全部暂停）", message)
+        self.assertIn("【虚拟账户历史回撤】11.1%", message)
+        self.assertIn("【风控状态】熔断（已暂停）", message)
+        self.assertNotIn("EV:", message)
+        self.assertNotIn("paper net EV below 5%", message)
+
+    def test_daily_report_risk_status_warn(self):
+        message = format_daily_report({
+            "risk_status": {"drawdown_level": "warn", "current_drawdown": 0.12},
+            "recommendations": [],
+        })
+        self.assertIn("【风控状态】警戒（额度减半）", message)
+        self.assertIn("【虚拟账户历史回撤】12.0%", message)
+        self.assertNotIn("熔断（已暂停）", message)
 
 
     def test_event_name_strips_team_region_suffix(self):
