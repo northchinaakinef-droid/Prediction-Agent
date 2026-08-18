@@ -51,6 +51,15 @@ class RiskConfigTests(TestCase):
         self.assertEqual(cfg.max_drawdown_fraction, 0.25)
         self.assertEqual(cfg.kelly_scale, 0.5)
 
+    def test_from_env_wires_drawdown_tiers(self):
+        with patch.dict(os.environ, {
+            "DRAWDOWN_WARN_FRACTION": "0.08",
+            "DRAWDOWN_CIRCUIT_FRACTION": "0.18",
+        }, clear=False):
+            cfg = RiskConfig.from_env()
+        self.assertEqual(cfg.drawdown_warn_fraction, 0.08)
+        self.assertEqual(cfg.drawdown_circuit_fraction, 0.18)
+
 
 class CostModelTests(TestCase):
     def test_price_dependent_cost_is_shared_formula(self):
@@ -94,6 +103,26 @@ class RiskLedgerTests(TestCase):
         self.assertEqual(rec.action, "NO_BET")
         self.assertEqual(rec.stake, 0)
         self.assertIn("account drawdown circuit breaker triggered", rec.reasons)
+
+    def test_drawdown_warn_halves_cap(self):
+        cfg = RiskConfig()
+        ledger = RiskBudgetLedger(cfg, 1000)
+        ledger.drawdown_level = "warn"
+        self.assertAlmostEqual(ledger.cap_for("event-1", None), cfg.max_bet_fraction * 0.5)
+
+    def test_drawdown_circuit_pauses_real_money(self):
+        cfg = RiskConfig()
+        ledger = RiskBudgetLedger(cfg, 1000)
+        ledger.drawdown_level = "circuit"
+        ledger.paper_mode = False
+        self.assertEqual(ledger.cap_for("event-1", None), 0.0)
+
+    def test_drawdown_circuit_halves_cap_in_paper_mode(self):
+        cfg = RiskConfig()
+        ledger = RiskBudgetLedger(cfg, 1000)
+        ledger.drawdown_level = "circuit"
+        ledger.paper_mode = True
+        self.assertAlmostEqual(ledger.cap_for("event-1", None), cfg.max_bet_fraction * 0.5)
 
 
 class DepthCapacityTests(TestCase):
