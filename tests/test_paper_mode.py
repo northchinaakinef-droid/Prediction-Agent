@@ -7,8 +7,8 @@ import unittest
 
 from prediction_agent.delivery import format_attribution_report, format_daily_report
 from prediction_agent.paper_store import (
-    attribution, mark_weekly_attribution_sent, record_report, settle_pending,
-    weekly_attribution_sent,
+    attribution, current_drawdown, mark_weekly_attribution_sent, record_report,
+    reset_paper_account, settle_pending, weekly_attribution_sent,
 )
 from prediction_agent.risk import paper_recommend
 from prediction_agent.sports_daily import (
@@ -163,6 +163,37 @@ class PaperModeTests(unittest.TestCase):
             self.assertEqual(attr["by_ev_tier"]["高"]["bets"], 1)
             self.assertEqual(attr["by_sport"]["nba"]["bets"], 1)
             self.assertEqual(attr["by_data_quality"]["历史数据（字段缺失）"]["bets"], 1)
+
+    def test_reset_paper_account_archives_history_and_resets_drawdown(self):
+        report = {
+            "generated_at": "2026-01-01T00:00:00+00:00",
+            "report_date": "2026-01-01",
+            "recommendations": [{
+                "generated_at": "2026-01-01T00:00:00+00:00",
+                "sport": "nba", "event_id": "losing", "outcome": "B",
+                "model_probability": .6, "market_probability": .55,
+                "execution_price": .55, "action": "BET", "stake": 100,
+                "probability_eligible": False, "real_money_approved": False,
+                "market_started": False,
+            }],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "paper.db"
+            record_report(path, report)
+            settle_pending(path, FakeSettledClient())
+            self.assertGreater(current_drawdown(path, 1000), 0.0)
+            result = reset_paper_account(path, 1000, reason="manual_reset")
+            self.assertEqual(result["archived_bet_rows"], 1)
+            self.assertAlmostEqual(current_drawdown(path, 1000), 0.0)
+            with closing(sqlite3.connect(path)) as connection:
+                archived = connection.execute(
+                    "SELECT archived FROM predictions WHERE event_id='losing'"
+                ).fetchone()
+                self.assertEqual(archived[0], 1)
+                reset_row = connection.execute(
+                    "SELECT action, reason FROM account_events WHERE action='RESET'"
+                ).fetchone()
+                self.assertEqual(reset_row, ("RESET", "manual_reset"))
 
     def test_attribution_groups_settled_bets(self):
         report = {

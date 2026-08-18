@@ -18,8 +18,8 @@ from prediction_agent.live_runtime import LiveSupervisor
 from prediction_agent.sports_daily import run_all
 from prediction_agent.paper_store import (
     attribution, mark_paper_summary_sent, mark_weekly_attribution_sent,
-    paper_daily_summary, paper_summary_sent, record_report, settle_pending,
-    summary as paper_summary, weekly_attribution_sent,
+    paper_daily_summary, paper_summary_sent, record_report, reset_paper_account,
+    settle_pending, summary as paper_summary, weekly_attribution_sent,
 )
 
 
@@ -259,6 +259,28 @@ def _health_ready() -> bool:
     return all(any(sources.get(name, {}).get("available") for name in group) for group in required_groups)
 
 
+def _reset_paper_account(reason: str) -> dict:
+    """Reset the virtual account, archive history, and notify Feishu."""
+    expected = os.getenv("RESET_TOKEN")
+    if not expected:
+        raise RuntimeError("RESET_TOKEN is not configured")
+    paper_path = Path(os.getenv("PAPER_DB_PATH", str(ROOT / "data" / "daily" / "paper.db")))
+    bankroll = float(os.getenv("BANKROLL_USDC", os.getenv("BANKROLL", "10000")))
+    result = reset_paper_account(paper_path, bankroll, reason)
+    message = (
+        "【虚拟账户重置】\n"
+        f"重置时间：{result['reset_at']}\n"
+        f"重置前回撤：{result['drawdown_before']:.1%}\n"
+        f"新基准资金：{bankroll:.2f} USDC\n"
+        f"原因：{result['reason']}"
+    )
+    try:
+        _send_message(message)
+    except Exception:
+        pass
+    return result
+
+
 class Health(BaseHTTPRequestHandler):
     def do_GET(self):  # noqa: N802
         if self.path not in {"/", "/health"}:
@@ -270,6 +292,31 @@ class Health(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
         self.wfile.write(payload)
+
+    def do_POST(self):  # noqa: N802
+        if self.path != "/reset_paper":
+            self.send_error(404)
+            return
+        expected = os.getenv("RESET_TOKEN")
+        if not expected or self.headers.get("X-Reset-Token") != expected:
+            self.send_error(401, "missing or invalid X-Reset-Token")
+            return
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+            raw = self.rfile.read(length) if length else b""
+            payload = json.loads(raw.decode("utf-8")) if raw else {}
+            reason = str(payload.get("reason") or "manual_reset")
+            result = _reset_paper_account(reason)
+            status = 200
+        except Exception as error:
+            result = {"error": repr(error)}
+            status = 500
+        body = json.dumps(result, ensure_ascii=False).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
     def log_message(self, *_args):
         return
