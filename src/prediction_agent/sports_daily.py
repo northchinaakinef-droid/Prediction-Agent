@@ -92,6 +92,19 @@ def _direction_match(prices: list[float], side: int) -> bool:
     if not prices or side is None:
         return False
     return side == max(range(len(prices)), key=lambda index: prices[index])
+
+
+def _direction_alignment(model_probabilities: list[float], market_probabilities: list[float]) -> bool:
+    """Return True when model side and market recommended side agree.
+
+    ``model_side`` uses the model probability for team A > 0.5, while
+    ``market_recommended_side`` uses the market probability for team A > 0.5.
+    """
+    if not model_probabilities or not market_probabilities or len(model_probabilities) < 2 or len(market_probabilities) < 2:
+        return False
+    model_side = "team_a" if float(model_probabilities[0]) > 0.5 else "team_b"
+    market_recommended_side = "team_a" if float(market_probabilities[0]) > 0.5 else "team_b"
+    return model_side == market_recommended_side
 def _lineup_status(roster_a: tuple[str, ...], roster_b: tuple[str, ...],
                    last_games: dict[str, str], teams: tuple[str, str],
                    now: datetime, max_age_days: int) -> str:
@@ -183,7 +196,7 @@ def analyze_sport(sport: str, model: EloModel | NbaModel, evaluation: dict, even
         p_a = series_probability(game_p, best_of)
         model_ps = [p_a, 1 - p_a]
         side = max(range(2), key=lambda index: model_ps[index] - prices[index])
-        direction_match = _direction_match(prices, side)
+        direction_match = _direction_alignment(model_ps, prices)
         first_bid, first_ask = market.get("bestBid"), market.get("bestAsk")
         ask = float(first_ask) if side == 0 and first_ask is not None else (
             1 - float(first_bid) if side == 1 and first_bid is not None else prices[side])
@@ -353,7 +366,7 @@ def _research_row(sport: str, event: dict, market: dict, scheduled: datetime | N
         ledger = RiskBudgetLedger(risk_config, bankroll)
     paper_enabled = _paper_trading_enabled()
     side = max(range(2), key=lambda index: probabilities[index] - prices[index])
-    direction_match = _direction_match(prices, side)
+    direction_match = _direction_alignment(probabilities, prices)
     bid, best_ask = market.get("bestBid"), market.get("bestAsk")
     ask = float(best_ask) if side == 0 and best_ask is not None else (
         1 - float(bid) if side == 1 and bid is not None else prices[side])
