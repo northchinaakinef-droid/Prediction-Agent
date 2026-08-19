@@ -11,6 +11,7 @@ from datetime import date
 from typing import Any, Callable
 
 from .live_engine import LiveAlert
+from .context import format_lineup_section
 
 from .providers.http import post_json
 
@@ -253,12 +254,15 @@ def format_daily_report(report: dict[str, Any], report_date: date | None = None)
             event = row.get("event") or row.get("event_id") or "未知赛事"
             outcome = row.get("outcome") or "-"
             stake = float(row.get("stake") or 0)
-            lines.append(f"[{index}] {event} | {outcome} | {stake:.2f} USDC")
+            status_label = {"虚拟下注": "【虚拟下注】", "真实建议": "【下注建议】"}.get(
+                str(row.get("bet_status") or ""), "")
+            lines.append(f"[{index}]{status_label} {event} | {outcome} | {stake:.2f} USDC")
             lines.append(
                 f"    EV: {percent(row.get('expected_value'))} | "
                 f"模型: {percent(row.get('model_probability'))} vs 市场: {percent(row.get('market_probability'))}"
             )
-            lines.append(f"    阵容状态: {row.get('lineup_status') or '未知'}")
+            lines.append(f"    阵容状态: {row.get('lineup_status') or '未知'} | "
+                         f"下注状态: {row.get('bet_status') or '跳过'}")
             lines.append(separator)
 
     if skipped_rows:
@@ -302,6 +306,14 @@ def format_daily_report(report: dict[str, Any], report_date: date | None = None)
         skip_detail = "｜".join(skip_parts) if skip_parts else "无分项明细"
         lines.append(f"【今日跳过】{skipped}场（{skip_detail}；EV>5%、方向一致性或风险预算未达标）")
     lines.append(f"【虚拟账户历史回撤】{drawdown_text} | 剩余额度: {remaining_text}")
+    virtual_betting = report.get("virtual_betting") or report.get("risk_status", {}).get("virtual_betting") or {}
+    if virtual_betting:
+        v_count = int(virtual_betting.get("count", 0))
+        v_roi = virtual_betting.get("roi")
+        v_balance = virtual_betting.get("balance")
+        v_roi_text = "暂无" if v_roi is None else f"{float(v_roi):.1%}"
+        v_balance_text = "暂无" if v_balance is None else f"{float(v_balance):.2f} USDC"
+        lines.append(f"【虚拟积累】{v_count}/100场 | 虚拟ROI: {v_roi_text} | 虚拟余额: {v_balance_text}")
     lines.append(f"【风控状态】{risk_status_text()}")
     return "\n".join(lines).strip()
 
@@ -606,6 +618,19 @@ def _format_draft_alert(row: dict[str, Any]) -> str:
     ]
     if post is not None:
         lines.append(f"BP 后模型胜率：蓝方 {post:.1%}｜红方 {1-post:.1%}")
+    team_a = _display_team(details.get("team_a") or "")
+    team_b = _display_team(details.get("team_b") or "")
+    bans_a = details.get("blue_bans") or []
+    bans_b = details.get("red_bans") or []
+    if team_a or team_b or bans_a or bans_b:
+        lines.extend([
+            "",
+            "【BP结果】",
+            f"{team_a or '蓝方'}：{'、'.join(_champion_cn(value) for value in bans_a) or '-'} / "
+            f"选：{'、'.join(_champion_cn(value) for value in blue_champions) or '-'}",
+            f"{team_b or '红方'}：{'、'.join(_champion_cn(value) for value in bans_b) or '-'} / "
+            f"选：{'、'.join(_champion_cn(value) for value in red_champions) or '-'}",
+        ])
     lines.extend([
         "",
         "【双方阵容】",
@@ -664,9 +689,10 @@ def _format_prematch_alert(row: dict[str, Any]) -> str:
     severity = {"EMERGENCY": "紧急", "IMPORTANT": "重要", "OBSERVE": "关注", "NORMAL": "关注"}.get(
         str(row.get("severity")), str(row.get("severity") or "关注"))
     details = row.get("details") or {}
+    sport = str(row.get("sport") or "")
     lines = [
         f"{icon}【赛前分析】",
-        f"{_sport_name(row.get('sport'))}｜{_event_name(row.get('title'))}",
+        f"{_sport_name(sport)}｜{_event_name(row.get('title'))}",
         f"重要度：{float(row.get('alert_score', 0)):.0f}/100｜级别：{severity}",
     ]
     outcome = details.get("outcome")
@@ -689,6 +715,54 @@ def _format_prematch_alert(row: dict[str, Any]) -> str:
             lines.append(f"市场胜率：{float(blue_market):.1%}｜{float(red_market):.1%}")
     else:
         lines.append("市场胜率：暂无对应报价")
+    ev = details.get("ev")
+    if ev is not None:
+        lines.append(f"EV：{float(ev):.1%}")
+    lines.extend(["", "【阵容信息】"])
+    lines.append(format_lineup_section(
+        sport,
+        team_a,
+        details.get("lineup_a") or [],
+        team_b,
+        details.get("lineup_b") or [],
+    ))
+    recent_a = details.get("recent_form_a")
+    recent_b = details.get("recent_form_b")
+    if recent_a or recent_b:
+        lines.extend(["", "【近期状态】（最近10场BO3）"])
+        for team, recent in ((team_a, recent_a), (team_b, recent_b)):
+            if recent:
+                wins = int(recent.get("wins", 0))
+                losses = int(recent.get("losses", 0))
+                total = max(1, wins + losses)
+                lines.append(f"{team}：{wins}胜{losses}负，近期胜率 {wins / total:.1%}")
+            else:
+                lines.append(f"{team}：近期数据不可用")
+    heroes = details.get("patch_meta_heroes") or []
+    if sport == "lol" and heroes:
+        coverage_a = details.get("meta_coverage_a")
+        coverage_b = details.get("meta_coverage_b")
+        lines.extend(["", "【版本关键英雄覆盖】（当前赛季强势英雄TOP5）"])
+        lines.append("、".join(str(hero) for hero in heroes))
+        def _coverage(value):
+            return "暂无" if value is None else f"{float(value):.0f}%"
+        lines.append(f"{team_a} 覆盖率：{_coverage(coverage_a)} | {team_b} 覆盖率：{_coverage(coverage_b)}")
+    elif sport == "cs2":
+        lines.extend(["", "【地图池】"])
+        format_text = details.get("format") or "BO1"
+        maps_a = details.get("map_strengths_a") or []
+        maps_b = details.get("map_strengths_b") or []
+        lines.append(f"{team_a} 强势图：{'、'.join(maps_a) or '暂无地图池数据'}")
+        lines.append(f"{team_b} 强势图：{'、'.join(maps_b) or '暂无地图池数据'}")
+        lines.append(f"本场赛制：{format_text}（BO1/BO3）")
+    sample_a = details.get("sample_a")
+    sample_b = details.get("sample_b")
+    if sample_a is not None or sample_b is not None:
+        lines.extend(["", "【历史样本】"])
+        lines.append(f"{team_a} {sample_a if sample_a is not None else '暂无'} 局 | "
+                     f"{team_b} {sample_b if sample_b is not None else '暂无'} 局")
+    bet_status = details.get("bet_status") or "跳过"
+    lines.extend(["", f"【下注状态】{bet_status}（虚拟下注 / 真实建议 / 跳过）"])
     analyst_count = int(details.get("analyst_count") or 0)
     if analyst_count:
         lines.append(f"分析师参考：已纳入 {analyst_count} 篇相关公开资料。")
@@ -702,6 +776,28 @@ def _format_prematch_alert(row: dict[str, Any]) -> str:
     return "\n".join(lines).strip()
 
 
+def _format_prematch_reference_alert(row: dict[str, Any]) -> str:
+    details = row.get("details") or {}
+    team_a = _display_team(details.get("team_a"))
+    team_b = _display_team(details.get("team_b"))
+    blue = details.get("blue_win_probability")
+    red = details.get("red_win_probability")
+    lines = [
+        "🔵【赛前参考】（赛程未录入，仅供参考）",
+        f"{_sport_name(row.get('sport'))}｜{_event_name(row.get('title'))}",
+    ]
+    if blue is not None and red is not None:
+        if team_a and team_b:
+            lines.append(f"模型胜率：{team_a} {float(blue):.1%} | {team_b} {float(red):.1%}")
+        else:
+            lines.append(f"模型胜率：{float(blue):.1%} | {float(red):.1%}")
+    ev = details.get("ev")
+    if ev is not None:
+        lines.append(f"EV：{float(ev):.1%}")
+    lines.extend(["注意：本场未在赛程库中命中，数据可信度下降，禁止下注。"])
+    return "\n".join(lines).strip()
+
+
 def _format_postmatch_alert(row: dict[str, Any]) -> str:
     icon = "🔴" if row.get("severity") == "EMERGENCY" else "🟠" if row.get("severity") == "IMPORTANT" else "🟡"
     severity = {"EMERGENCY": "紧急", "IMPORTANT": "重要", "OBSERVE": "关注", "NORMAL": "关注"}.get(
@@ -712,6 +808,9 @@ def _format_postmatch_alert(row: dict[str, Any]) -> str:
         f"{_sport_name(row.get('sport'))}｜{_event_name(row.get('title'))}",
         f"重要度：{float(row.get('alert_score', 0)):.0f}/100｜级别：{severity}",
     ]
+    pre_match_status = details.get("pre_match_status")
+    if pre_match_status:
+        lines.append(f"赛前分析状态：{pre_match_status}")
     actual_winner = details.get("actual_winner")
     if actual_winner:
         lines.append(f"实际胜者：{_display_team(actual_winner)}")
@@ -752,6 +851,8 @@ def format_live_alert(alert: LiveAlert | dict[str, Any]) -> str:
         return _format_draft_alert(row)
     if str(row.get("category")) == "PREMATCH_ANALYSIS" and row.get("details"):
         return _format_prematch_alert(row)
+    if str(row.get("category")) == "PREMATCH_REFERENCE" and row.get("details"):
+        return _format_prematch_reference_alert(row)
     if str(row.get("category")) == "POSTMATCH_REVIEW" and row.get("details"):
         return _format_postmatch_alert(row)
     icon = "🔴" if row.get("severity") == "EMERGENCY" else "🟠" if row.get("severity") == "IMPORTANT" else "🟡"
@@ -761,7 +862,8 @@ def format_live_alert(alert: LiveAlert | dict[str, Any]) -> str:
     category = {
         "MARKET_ANOMALY": "盘口异常", "MAJOR_EVENT": "重大事件", "PROBABILITY_CHANGE": "概率变化",
         "NEWS_ALERT": "阵容 / 新闻异常",
-        "PREMATCH_ANALYSIS": "赛前分析", "DRAFT_ANALYSIS": "BP 完成分析",
+        "PREMATCH_ANALYSIS": "赛前分析", "PREMATCH_REFERENCE": "赛前参考",
+        "LINEUP_MISSING": "阵容缺失提示", "DRAFT_ANALYSIS": "BP 完成分析",
         "MATCH_START": "比赛开始", "PERIOD_UPDATE": "节次更新", "CLUTCH_TIME": "关键时段",
         "MATCH_FINISHED": "比赛结束", "WATCHER_MISSING": "监控缺失",
         "MONITORING_RECOVERY": "监控恢复", "POSTMATCH_REVIEW": "赛后复盘",

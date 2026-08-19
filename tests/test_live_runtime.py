@@ -124,6 +124,7 @@ class LiveRuntimeTests(unittest.TestCase):
                 "recommendations": [{
                     "sport": "lol", "event": "T1 vs Gen.G", "outcome": "T1",
                     "model_probability": .63, "market_probability": .58,
+                    "lineup_status": "完整",
                     "reasons": ["team strength edge"],
                 }],
             }
@@ -372,6 +373,7 @@ class LiveRuntimeTests(unittest.TestCase):
                 "recommendations": [{
                     "sport": "lol", "event": "T1 vs Gen.G", "outcome": "T1",
                     "model_probability": .63,
+                    "lineup_status": "完整",
                 }],
                 "schedule_coverage": {"lol": {"matches": [
                     {"match_id": "m1", "team_a": "T1", "team_b": "Gen.G",

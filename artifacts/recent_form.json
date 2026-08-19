@@ -1,0 +1,1280 @@
+{
+  "lol": {
+    "IZI Dream": {
+      "wins": 5,
+      "losses": 5,
+      "last_n": 10
+    },
+    "Team Valiant": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "Esprit Shōnen": {
+      "wins": 10,
+      "losses": 0,
+      "last_n": 10
+    },
+    "Skillcamp": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "Karmine Corp Blue Stars": {
+      "wins": 10,
+      "losses": 0,
+      "last_n": 10
+    },
+    "Project Conquerors": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "Zerance": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "Lille Esport": {
+      "wins": 5,
+      "losses": 5,
+      "last_n": 10
+    },
+    "Weibo Gaming": {
+      "wins": 5,
+      "losses": 5,
+      "last_n": 10
+    },
+    "Oh My God": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "Nongshim Esports Academy": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "DN Freecs Challengers": {
+      "wins": 5,
+      "losses": 5,
+      "last_n": 10
+    },
+    "OKSavingsBank BRION Challengers": {
+      "wins": 5,
+      "losses": 5,
+      "last_n": 10
+    },
+    "T1 Esports Academy": {
+      "wins": 5,
+      "losses": 5,
+      "last_n": 10
+    },
+    "LNG Esports": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "ThunderTalk Gaming": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "BNK FEARX Youth": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "Hanwha Life Esports Challengers": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "Dplus KIA Challengers": {
+      "wins": 5,
+      "losses": 5,
+      "last_n": 10
+    },
+    "KT Rolster Challengers": {
+      "wins": 5,
+      "losses": 5,
+      "last_n": 10
+    },
+    "Royal Never Give Up": {
+      "wins": 5,
+      "losses": 5,
+      "last_n": 10
+    },
+    "FunPlus Phoenix": {
+      "wins": 5,
+      "losses": 5,
+      "last_n": 10
+    },
+    "DRX Challengers": {
+      "wins": 5,
+      "losses": 5,
+      "last_n": 10
+    },
+    "Gen.G Global Academy": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "Ramboot Club": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "ZETA": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "LUA Gaming": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "Guasones": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "GIANTX Pride": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "Veni Vidi Vici": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "Movistar KOI Fénix": {
+      "wins": 5,
+      "losses": 5,
+      "last_n": 10
+    },
+    "UCAM Esports": {
+      "wins": 5,
+      "losses": 5,
+      "last_n": 10
+    },
+    "Los Heretics": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "Barça eSports": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "HANJIN BRION": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "DRX": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "Ultra Prime": {
+      "wins": 10,
+      "losses": 0,
+      "last_n": 10
+    },
+    "DN Freecs": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "Nongshim RedForce": {
+      "wins": 5,
+      "losses": 5,
+      "last_n": 10
+    },
+    "Los Ratones": {
+      "wins": 10,
+      "losses": 0,
+      "last_n": 10
+    },
+    "NORD Esports": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "Bulldog Esports": {
+      "wins": 5,
+      "losses": 5,
+      "last_n": 10
+    },
+    "Verdant": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "Lundqvist Lightside": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "BNK FEARX": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "KT Rolster": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "LGD Gaming": {
+      "wins": 5,
+      "losses": 5,
+      "last_n": 10
+    },
+    "Anyone's Legend": {
+      "wins": 5,
+      "losses": 5,
+      "last_n": 10
+    },
+    "Dplus KIA": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "T1": {
+      "wins": 5,
+      "losses": 5,
+      "last_n": 10
+    },
+    "The Ruddy Sack": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "Rich Gang": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "DMG Esports": {
+      "wins": 5,
+      "losses": 5,
+      "last_n": 10
+    },
+    "Venomcrest Esports": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "KAOS e-sport": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "Gen.G": {
+      "wins": 5,
+      "losses": 5,
+      "last_n": 10
+    },
+    "Hanwha Life Esports": {
+      "wins": 10,
+      "losses": 0,
+      "last_n": 10
+    },
+    "Edward Gaming": {
+      "wins": 5,
+      "losses": 5,
+      "last_n": 10
+    },
+    "Bilibili Gaming": {
+      "wins": 10,
+      "losses": 0,
+      "last_n": 10
+    },
+    "CTBC Flying Oyster": {
+      "wins": 5,
+      "losses": 5,
+      "last_n": 10
+    },
+    "MGN Vikings Esports": {
+      "wins": 5,
+      "losses": 5,
+      "last_n": 10
+    },
+    "Fukuoka SoftBank HAWKS gaming": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "GAM Esports": {
+      "wins": 5,
+      "losses": 5,
+      "last_n": 10
+    },
+    "Top Esports": {
+      "wins": 10,
+      "losses": 0,
+      "last_n": 10
+    },
+    "Team WE": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "Team Secret Whales": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "DetonatioN FocusMe": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "TALON": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "Chiefs Esports Club": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "Team Heretics": {
+      "wins": 5,
+      "losses": 5,
+      "last_n": 10
+    },
+    "Rogue": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "Team Vitality": {
+      "wins": 5,
+      "losses": 5,
+      "last_n": 10
+    },
+    "Team BDS": {
+      "wins": 5,
+      "losses": 5,
+      "last_n": 10
+    },
+    "GiantX": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "SK Gaming": {
+      "wins": 5,
+      "losses": 5,
+      "last_n": 10
+    },
+    "Movistar KOI": {
+      "wins": 5,
+      "losses": 5,
+      "last_n": 10
+    },
+    "Fnatic": {
+      "wins": 5,
+      "losses": 5,
+      "last_n": 10
+    },
+    "Karmine Corp": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "G2 Esports": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "Invictus Gaming": {
+      "wins": 10,
+      "losses": 0,
+      "last_n": 10
+    },
+    "Ninjas in Pyjamas": {
+      "wins": 5,
+      "losses": 5,
+      "last_n": 10
+    },
+    "JD Gaming": {
+      "wins": 5,
+      "losses": 5,
+      "last_n": 10
+    },
+    "Gamespace Mediterranean College Esports": {
+      "wins": 5,
+      "losses": 5,
+      "last_n": 10
+    },
+    "Team Refuse": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "Zerolag Esports": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "WLGaming Esports": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "Team Insidious": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "Actions Per Minute": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "Team Paradox": {
+      "wins": 5,
+      "losses": 5,
+      "last_n": 10
+    },
+    "Team Phantasma": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "Berlin International Gaming": {
+      "wins": 10,
+      "losses": 0,
+      "last_n": 10
+    },
+    "Unicorns of Love Sexy Edition": {
+      "wins": 10,
+      "losses": 0,
+      "last_n": 10
+    },
+    "Eintracht Frankfurt": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "Dung Dynasty": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "BK ROG Esports": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "Team BDS Academy": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "TeamOrangeGaming": {
+      "wins": 10,
+      "losses": 0,
+      "last_n": 10
+    },
+    "E WIE EINFACH E-SPORTS": {
+      "wins": 10,
+      "losses": 0,
+      "last_n": 10
+    },
+    "Zena Esports": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "Underworld Esports": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "Galions": {
+      "wins": 5,
+      "losses": 5,
+      "last_n": 10
+    },
+    "Ici Japon Corp. Esport": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "Axolotl": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "Macko Esports": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "GMBLERS Esports": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "EKO Esports": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "Gentle Mates": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "GameWard": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "Karmine Corp Blue": {
+      "wins": 5,
+      "losses": 5,
+      "last_n": 10
+    },
+    "Joblife": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "Austrian Force willhaben": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "Eintracht Spandau": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "Papara SuperMassive": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "BBL Dark Passage": {
+      "wins": 5,
+      "losses": 5,
+      "last_n": 10
+    },
+    "ULF Esports": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "Beşiktaş Esports": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "Diversion Gaming": {
+      "wins": 5,
+      "losses": 5,
+      "last_n": 10
+    },
+    "unknown team": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "Bushido Wildcats": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "BoostGate Esports": {
+      "wins": 5,
+      "losses": 5,
+      "last_n": 10
+    },
+    "Solary": {
+      "wins": 5,
+      "losses": 5,
+      "last_n": 10
+    },
+    "Eternal Fire": {
+      "wins": 5,
+      "losses": 5,
+      "last_n": 10
+    },
+    "Misa Esports": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "KIA.eSuba Academy": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "Meavedron": {
+      "wins": 5,
+      "losses": 5,
+      "last_n": 10
+    },
+    "Vitality.Bee": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "Divernex": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "Team Meliora": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "REJECT": {
+      "wins": 10,
+      "losses": 0,
+      "last_n": 10
+    },
+    "Spirit Quartz Gaming": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "VARREL YOUTH": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "LOUD": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "paiN Gaming": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "Vivo Keyd Stars": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "Leviatan": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "Shopify Rebellion": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "FlyQuest": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "LYON": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "Cloud9": {
+      "wins": 5,
+      "losses": 5,
+      "last_n": 10
+    },
+    "Isurus Estral": {
+      "wins": 5,
+      "losses": 5,
+      "last_n": 10
+    },
+    "FURIA": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "RED Canids": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "Fluxo W7M": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "Disguised": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "100 Thieves": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "Dignitas": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "Team Liquid": {
+      "wins": 5,
+      "losses": 5,
+      "last_n": 10
+    },
+    "Kiedyś Miałem Fun": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "Zero Tenacity": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "Kaufland Hangry Knights": {
+      "wins": 10,
+      "losses": 0,
+      "last_n": 10
+    },
+    "Forsaken": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "Back2TheGame": {
+      "wins": 5,
+      "losses": 5,
+      "last_n": 10
+    },
+    "MY STAR": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "devils.one x Kiedyś Miałem Team": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "ROSSMANN Centaurs": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "LODIS": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "Orbit Anonymo Esports": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "Burning Core Toyama": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "DetonatioN FocusMe Academy": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "V3 Esports": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "Falke Esports": {
+      "wins": 10,
+      "losses": 0,
+      "last_n": 10
+    },
+    "Guinea Pink": {
+      "wins": 5,
+      "losses": 5,
+      "last_n": 10
+    },
+    "Green Dolphin Gaming": {
+      "wins": 10,
+      "losses": 0,
+      "last_n": 10
+    },
+    "CORE 128": {
+      "wins": 5,
+      "losses": 5,
+      "last_n": 10
+    },
+    "Monta Club": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "eQuizers": {
+      "wins": 10,
+      "losses": 0,
+      "last_n": 10
+    },
+    "Fractious eSports": {
+      "wins": 5,
+      "losses": 5,
+      "last_n": 10
+    },
+    "Oxygen Gaming": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "PRINCIPALITY": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "Dream Makers": {
+      "wins": 5,
+      "losses": 5,
+      "last_n": 10
+    },
+    "Universae Instituto FP": {
+      "wins": 5,
+      "losses": 5,
+      "last_n": 10
+    },
+    "Kawaii Kiwis": {
+      "wins": 5,
+      "losses": 5,
+      "last_n": 10
+    },
+    "Ankora Gaming": {
+      "wins": 5,
+      "losses": 5,
+      "last_n": 10
+    },
+    "BeFive": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "Crvena zvezda Esports": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "Lupus Esports": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "Partizan Esports": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "SPIKE Syndicate": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "Team UNiTY": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "Dynamo Eclot Talents": {
+      "wins": 5,
+      "losses": 5,
+      "last_n": 10
+    },
+    "Nightbirds": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "Inside Games": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "GLORE": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "Delta Syndicate": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "eSuba": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "BRUTE": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "Entropiq": {
+      "wins": 10,
+      "losses": 0,
+      "last_n": 10
+    },
+    "Dynamo Eclot": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "EXILE esports": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "Tan'i eSports CZ": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "Frank Esports": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "CTBC Flying Oyster Academy": {
+      "wins": 10,
+      "losses": 0,
+      "last_n": 10
+    },
+    "Ground Zero Gaming": {
+      "wins": 10,
+      "losses": 0,
+      "last_n": 10
+    },
+    "HELL PIGS": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "Deep Cross Gaming": {
+      "wins": 10,
+      "losses": 0,
+      "last_n": 10
+    },
+    "TALON Academy": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "West Point Esports": {
+      "wins": 10,
+      "losses": 0,
+      "last_n": 10
+    },
+    "Hungkuang Falcon (弘光獵鷹)": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "Once Upon A Team": {
+      "wins": 5,
+      "losses": 5,
+      "last_n": 10
+    },
+    "A One Man Army": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "ZennIT": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "Senshi eSports": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "BWE Esports": {
+      "wins": 5,
+      "losses": 5,
+      "last_n": 10
+    },
+    "Leões Porto Salvo Esports": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "Keypulse Esports": {
+      "wins": 5,
+      "losses": 5,
+      "last_n": 10
+    },
+    "Hurricane of Feathers": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "White Dragons": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "Aurora": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "Myth Esports": {
+      "wins": 10,
+      "losses": 0,
+      "last_n": 10
+    },
+    "GTZ Esports": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "ZeroZone Gaming": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "mCon esports": {
+      "wins": 5,
+      "losses": 5,
+      "last_n": 10
+    },
+    "Jörmungang": {
+      "wins": 5,
+      "losses": 5,
+      "last_n": 10
+    },
+    "Odivelas Sports Club": {
+      "wins": 5,
+      "losses": 5,
+      "last_n": 10
+    },
+    "GnG Amazigh": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "Anubis Gaming": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "Nigma Galaxy": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "One More Esports": {
+      "wins": 5,
+      "losses": 5,
+      "last_n": 10
+    },
+    "Geekay Esports": {
+      "wins": 5,
+      "losses": 5,
+      "last_n": 10
+    },
+    "Fog Esports": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "FlameHard": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "For The Win Esports": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "Fox Gaming": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "Baam Esports": {
+      "wins": 5,
+      "losses": 5,
+      "last_n": 10
+    },
+    "Grow uP eSports": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "Lenovo Legion Honvéd": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "The Secret Club": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "Fantastic Esports": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "Magaza Esports": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "SINS Esports": {
+      "wins": 10,
+      "losses": 0,
+      "last_n": 10
+    },
+    "Saigon Dino": {
+      "wins": 10,
+      "losses": 0,
+      "last_n": 10
+    },
+    "CyberCore Esports": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "Hyper Vortex Esports": {
+      "wins": 5,
+      "losses": 5,
+      "last_n": 10
+    },
+    "Silent Storm Esports": {
+      "wins": 5,
+      "losses": 5,
+      "last_n": 10
+    },
+    "Saigon Secret": {
+      "wins": 5,
+      "losses": 5,
+      "last_n": 10
+    },
+    "Hanoi Rookies Esports": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "Team Flash": {
+      "wins": 10,
+      "losses": 0,
+      "last_n": 10
+    },
+    "Never Give Up": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "wangting": {
+      "wins": 10,
+      "losses": 0,
+      "last_n": 10
+    },
+    "RED Academy": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "Vivo Keyd Stars Academy": {
+      "wins": 5,
+      "losses": 5,
+      "last_n": 10
+    },
+    "Los Grandes": {
+      "wins": 10,
+      "losses": 0,
+      "last_n": 10
+    },
+    "Flamengo MDL": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "RATZ": {
+      "wins": 5,
+      "losses": 5,
+      "last_n": 10
+    },
+    "Dopamina E-Sport": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "Stellae Gaming": {
+      "wins": 10,
+      "losses": 0,
+      "last_n": 10
+    },
+    "Rise Gaming": {
+      "wins": 5,
+      "losses": 5,
+      "last_n": 10
+    },
+    "KaBuM! Ilha das Lendas": {
+      "wins": 5,
+      "losses": 5,
+      "last_n": 10
+    },
+    "Corinthians Esports": {
+      "wins": 10,
+      "losses": 0,
+      "last_n": 10
+    },
+    "Sengoku Gaming": {
+      "wins": 10,
+      "losses": 0,
+      "last_n": 10
+    },
+    "Farenvehn": {
+      "wins": 0,
+      "losses": 10,
+      "last_n": 10
+    },
+    "Maze Gaming": {
+      "wins": 10,
+      "losses": 0,
+      "last_n": 10
+    },
+    "Fuego": {
+      "wins": 10,
+      "losses": 0,
+      "last_n": 10
+    },
+    "INFINITY": {
+      "wins": 10,
+      "losses": 0,
+      "last_n": 10
+    },
+    "PÊEK Gaming": {
+      "wins": 10,
+      "losses": 0,
+      "last_n": 10
+    }
+  },
+  "cs2": {}
+}
