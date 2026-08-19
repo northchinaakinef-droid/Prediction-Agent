@@ -207,6 +207,61 @@ class CoreTests(unittest.TestCase):
         self.assertIn("判断：错误", text)
         self.assertIn("判断：正确", text)
 
+    def test_lol_postmatch_alert_uses_game_evidence_and_drops_generic_repetition(self):
+        text = _format_postmatch_alert({
+            "severity": "IMPORTANT", "alert_score": 70, "sport": "lol",
+            "title": "Anyone's Legend vs Top Esports",
+            "details": {
+                "actual_winner": "Top Esports", "actual_side": "b",
+                "team_a": "Anyone's Legend", "team_b": "Top Esports",
+                "prematch_side": None, "bp_side": "a", "bp_probability": .526,
+                "decisive_factors": ["防御塔差 -5（红方占优）"],
+                "game_samples": [{
+                    "game_index": 1, "winner_side": "b",
+                    "blue_players": ["Flandre", "Tarzan"],
+                    "red_players": ["369", "Kanavi"],
+                    "blue_champions": ["Renekton", "Sejuani"],
+                    "red_champions": ["Gnar", "Wukong"],
+                    "towers_a": 3, "towers_b": 8,
+                    "dragons_a": 1, "dragons_b": 3,
+                    "barons_a": 0, "barons_b": 2,
+                    "players": [{
+                        "team": "Top Esports", "player": "Kanavi", "champion": "Wukong",
+                        "kills": 5, "deaths": 1, "assists": 9, "gold": 12800, "cs": 210,
+                    }],
+                }],
+                "analyst_notes": [{"source": "公开赛评", "title": "TES 中野资源控制复盘"}],
+            },
+            "reasons": [
+                "赛前预测：未生成有效概率。",
+                "BP后预测：蓝方 52.6%｜红方 47.4%；判断错误。",
+                "复盘：比赛走势偏离预测，需重点核查阵容克制、资源节奏或临场发挥。",
+                "复盘：比赛走势偏离预测，需重点核查阵容克制、资源节奏或临场发挥。",
+            ],
+        })
+        self.assertIn("阵容与 BP：", text)
+        self.assertIn("Flandre/Renekton", text)
+        self.assertIn("比赛过程：", text)
+        self.assertIn("塔 3-8", text)
+        self.assertIn("选手表现：", text)
+        self.assertIn("Kanavi（Wukong）KDA 5/1/9", text)
+        self.assertIn("模型偏差解释：", text)
+        self.assertIn("资源转化推翻了 BP 初始优势", text)
+        self.assertIn("公开赛评：TES 中野资源控制复盘", text)
+        self.assertNotIn("需重点核查阵容克制", text)
+        self.assertEqual(text.count("赛前预测：未生成有效概率"), 1)
+        self.assertEqual(text.count("BP后预测：蓝方 52.6%"), 1)
+
+    def test_lol_postmatch_alert_reports_missing_evidence_honestly(self):
+        text = _format_postmatch_alert({
+            "severity": "IMPORTANT", "alert_score": 70, "sport": "lol",
+            "title": "A vs B",
+            "details": {"actual_winner": "B", "actual_side": "b", "game_samples": []},
+            "reasons": [],
+        })
+        self.assertIn("未取得逐局 BP、资源和选手数据", text)
+        self.assertNotIn("比赛走势偏离预测", text)
+
     def test_draft_alert_includes_strength_and_risk_sections(self):
         text = _format_draft_alert({
             "severity": "IMPORTANT", "alert_score": 60, "sport": "lol",

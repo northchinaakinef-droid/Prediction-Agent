@@ -798,6 +798,131 @@ def _format_prematch_reference_alert(row: dict[str, Any]) -> str:
     return "\n".join(lines).strip()
 
 
+def _lol_resource_summary(game: dict[str, Any]) -> str:
+    parts = []
+    for label, key_a, key_b in (
+        ("塔", "towers_a", "towers_b"),
+        ("小龙", "dragons_a", "dragons_b"),
+        ("大龙", "barons_a", "barons_b"),
+        ("先锋", "rift_heralds_a", "rift_heralds_b"),
+        ("高地", "inhibitors_a", "inhibitors_b"),
+    ):
+        value_a, value_b = game.get(key_a), game.get(key_b)
+        if value_a is not None and value_b is not None:
+            parts.append(f"{label} {value_a}-{value_b}")
+    return "｜".join(parts)
+
+
+def _lol_player_performance(game: dict[str, Any], limit: int = 3) -> list[str]:
+    ranked = []
+    for player in game.get("players") or []:
+        try:
+            kills = int(player.get("kills") or 0)
+            deaths = int(player.get("deaths") or 0)
+            assists = int(player.get("assists") or 0)
+        except (TypeError, ValueError):
+            continue
+        name = str(player.get("player") or "").strip()
+        if not name:
+            continue
+        impact = (kills + assists) / max(1, deaths)
+        ranked.append((impact, kills, assists, -deaths, name, player))
+    lines = []
+    for _, kills, assists, neg_deaths, _, player in sorted(ranked, reverse=True)[:limit]:
+        deaths = -neg_deaths
+        team = _display_team(player.get("team"))
+        champion = str(player.get("champion") or "").strip()
+        gold = player.get("gold")
+        cs = player.get("cs")
+        extras = []
+        if gold is not None:
+            extras.append(f"金币 {gold}")
+        if cs is not None:
+            extras.append(f"补刀 {cs}")
+        suffix = f"｜{'｜'.join(extras)}" if extras else ""
+        lines.append(
+            f"{team} {player.get('player')}（{champion or '英雄未知'}）"
+            f"KDA {kills}/{deaths}/{assists}{suffix}"
+        )
+    return lines
+
+
+def _lol_model_error_readout(details: dict[str, Any], games: list[dict[str, Any]]) -> str | None:
+    actual_side = details.get("actual_side")
+    bp_side = details.get("bp_side")
+    if actual_side is None or bp_side is None or actual_side == bp_side:
+        return None
+    predicted = "蓝方" if bp_side == "a" else "红方"
+    winner = "蓝方" if actual_side == "a" else "红方"
+    evidence = []
+    for game in games:
+        for label, key_a, key_b in (
+            ("塔", "towers_a", "towers_b"),
+            ("小龙", "dragons_a", "dragons_b"),
+            ("大龙", "barons_a", "barons_b"),
+        ):
+            value_a, value_b = game.get(key_a), game.get(key_b)
+            if value_a is None or value_b is None or value_a == value_b:
+                continue
+            leading = "蓝方" if float(value_a) > float(value_b) else "红方"
+            if leading == winner:
+                evidence.append(f"{label}{value_a}-{value_b}")
+    evidence_text = "、".join(dict.fromkeys(evidence))
+    if evidence_text:
+        return f"模型偏向{predicted}，但{winner}在可观测资源上取得 {evidence_text}，资源转化推翻了 BP 初始优势。"
+    return f"模型偏向{predicted}但实际由{winner}获胜；当前逐局资源字段不足，不能进一步归因。"
+
+
+def _format_lol_postmatch_evidence(details: dict[str, Any]) -> list[str]:
+    games = list(details.get("game_samples") or [])
+    if not games:
+        return ["", "深度复盘：", "• 未取得逐局 BP、资源和选手数据，无法做阵容/过程/选手层面的可靠归因。"]
+    lines = ["", "阵容与 BP："]
+    for game in games:
+        index = int(game.get("game_index") or 0)
+        blue_players = list(game.get("blue_players") or [])
+        red_players = list(game.get("red_players") or [])
+        blue_champions = list(game.get("blue_champions") or [])
+        red_champions = list(game.get("red_champions") or [])
+        blue_draft = "、".join(
+            f"{player}/{champion}" for player, champion in zip(blue_players, blue_champions)
+        ) or "、".join(str(value) for value in blue_champions) or "数据缺失"
+        red_draft = "、".join(
+            f"{player}/{champion}" for player, champion in zip(red_players, red_champions)
+        ) or "、".join(str(value) for value in red_champions) or "数据缺失"
+        lines.append(f"• 第{index}局 蓝方：{blue_draft}")
+        lines.append(f"• 第{index}局 红方：{red_draft}")
+
+    lines.extend(["", "比赛过程："])
+    for game in games:
+        index = int(game.get("game_index") or 0)
+        resources = _lol_resource_summary(game)
+        winner_side = game.get("winner_side")
+        winner = details.get("team_a") if winner_side == "a" else details.get("team_b") if winner_side == "b" else None
+        parts = [f"第{index}局"]
+        if winner:
+            parts.append(f"胜者 {_display_team(winner)}")
+        if resources:
+            parts.append(resources)
+        lines.append("• " + "｜".join(parts))
+
+    player_lines = []
+    for game in games:
+        for line in _lol_player_performance(game):
+            if line not in player_lines:
+                player_lines.append(line)
+    lines.extend(["", "选手表现："])
+    if player_lines:
+        lines.extend(f"• {line}" for line in player_lines[:5])
+    else:
+        lines.append("• 选手逐局数据缺失，无法可靠评价个人状态。")
+
+    error_readout = _lol_model_error_readout(details, games)
+    if error_readout:
+        lines.extend(["", "模型偏差解释：", f"• {error_readout}"])
+    return lines
+
+
 def _format_postmatch_alert(row: dict[str, Any]) -> str:
     icon = "🔴" if row.get("severity") == "EMERGENCY" else "🟠" if row.get("severity") == "IMPORTANT" else "🟡"
     severity = {"EMERGENCY": "紧急", "IMPORTANT": "重要", "OBSERVE": "关注", "NORMAL": "关注"}.get(
@@ -838,9 +963,22 @@ def _format_postmatch_alert(row: dict[str, Any]) -> str:
     if decisive_factors:
         lines.extend(["", "胜负手："])
         lines.extend(f"• {factor}" for factor in decisive_factors)
-    lines.extend(["", "复盘说明："])
-    for reason in row.get("reasons", [])[:4]:
-        lines.append(f"• {_zh_live_text(reason)}")
+    if str(row.get("sport") or "").casefold() == "lol":
+        lines.extend(_format_lol_postmatch_evidence(details))
+    useful_reasons = []
+    for reason in row.get("reasons", []):
+        text = _zh_live_text(reason)
+        if text.startswith(("赛前预测：", "BP后预测：", "复盘：")):
+            continue
+        if text not in useful_reasons:
+            useful_reasons.append(text)
+    if useful_reasons:
+        lines.extend(["", "补充说明："])
+        lines.extend(f"• {reason}" for reason in useful_reasons[:3])
+    analyst_notes = details.get("analyst_notes") or []
+    if analyst_notes:
+        lines.extend(["", "公开资料："])
+        lines.extend(f"• {note.get('source') or '公开来源'}：{note.get('title')}" for note in analyst_notes[:3])
     lines.extend(["", "研究监控信号，不构成下注建议。"])
     return "\n".join(lines).strip()
 
