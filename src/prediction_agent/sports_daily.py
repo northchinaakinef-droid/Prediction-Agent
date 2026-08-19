@@ -1,5 +1,4 @@
 from __future__ import annotations
-
 import json
 import logging
 import math
@@ -9,7 +8,6 @@ from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
-
 from .cs2_model import Cs2Model, load_cs2
 from .lol_meta_model import LolDraftGame, LolMetaModel, load_lol_meta
 from .lol_model import EloModel, load_model, series_probability
@@ -19,77 +17,56 @@ from .providers.live_data import (
     Bo3Cs2Provider, EsportAgendaCs2Provider, EspnNbaProvider, GridOpenAccessProvider, NbaOfficialProvider,
     PandaScoreProvider, SportSrcNbaProvider, TheSportsDbNbaProvider,
 )
-from .risk import RiskBudgetLedger, RiskConfig, paper_recommend, recommend
+from .risk import RiskBudgetLedger, RiskConfig, kelly_fraction, paper_recommend, recommend
 from .entities import canonical_team, normalized_name
+from .betting_gate import bet_status, can_place_real_bet, should_place_virtual_bet
+from .context import player_display_names, recent_form_for
+from .paper_store import calc_roi, count_virtual_bets, current_drawdown, record_virtual_bet, virtual_account_balance
 from .costs import estimate_cost_rate
 from .narrative import build_pre_match_summary
 from .schedule import (
     LolScheduleDiscovery, SourceResult, append_schedule_audit, build_schedule_audit, make_match,
 )
-
-
 TAGS = {"nba": "745", "lol": "65", "cs2": "100780"}
-
-
 def _paper_trading_enabled() -> bool:
     """Paper betting can run before real-money ROI acceptance.
-
     This only controls the append-only paper ledger.  Real-money approval is a
     separate, stricter ``approved_for_real_money`` flag and is never implied.
     """
     return os.getenv("PAPER_TRADING_ENABLED", "true").casefold() == "true"
-
-
 def _in_horizon(scheduled: datetime | None, now: datetime) -> bool:
     hours = float(os.getenv("MARKET_HORIZON_HOURS", "30"))
     return scheduled is not None and now < scheduled <= now + timedelta(hours=hours)
-
-
 def _timing(scheduled: datetime, now: datetime) -> tuple[float, str]:
     hours = (scheduled - now).total_seconds() / 3600
     target = min((1, 6, 24), key=lambda value: abs(value - hours))
     return hours, f"T-{target}h"
-
-
 LOL_MAJOR_EVENT_KEYWORDS = (
     "lpl", "lck", "lec", "lcs", "lta", "lcp", "msi", "worlds",
     "world championship", "first stand", "ewc", "esports world cup",
 )
-
-
 def _is_major_lol_event(title: object) -> bool:
     lowered = str(title or "").casefold()
     return any(keyword in lowered for keyword in LOL_MAJOR_EVENT_KEYWORDS)
-
-
 CS2_MAJOR_EVENT_KEYWORDS = (
     "major", "iem", "intel extreme masters", "esl pro league",
     "blast premier", "blast open", "blast showdown", "blast.tv",
     "pgl", "esports world cup", "ewc",
 )
-
 CS2_MINOR_EVENT_KEYWORDS = (
     "cct", "esea", "esl challenger", "rising", "regional", "national",
     "academy", "open qualifier", "closed qualifier", "qualifier",
 )
-
-
 def _is_major_cs2_event(title: object) -> bool:
     lowered = str(title or "").casefold()
     if any(keyword in lowered for keyword in CS2_MINOR_EVENT_KEYWORDS):
         return False
     return any(keyword in lowered for keyword in CS2_MAJOR_EVENT_KEYWORDS)
-
-
 def _field(value):
     return json.loads(value) if isinstance(value, str) else list(value or [])
-
-
 def _text(value: object) -> str:
     return "".join(character for character in str(value)
                    if unicodedata.category(character) not in {"Cc", "Cf"}).strip()
-
-
 def _probability_sanity(model_probability: float, market_probability: float | None) -> list[str]:
     """Surface implausible probabilities instead of silently publishing them."""
     problems: list[str] = []
@@ -102,8 +79,6 @@ def _probability_sanity(model_probability: float, market_probability: float | No
         if divergence > 0.35:
             problems.append(f"模型与市场价格分歧过大（{divergence:.1%}），可能为赛程-市场映射异常或数据错误。")
     return problems
-
-
 def _ev_tier(value: float | None) -> str:
     if value is None:
         return "未知"
@@ -112,15 +87,11 @@ def _ev_tier(value: float | None) -> str:
     if value > 0.05:
         return "中"
     return "低"
-
-
 def _direction_match(prices: list[float], side: int) -> bool:
     """Return True when the model side is the market favorite (lower payout side)."""
     if not prices or side is None:
         return False
     return side == max(range(len(prices)), key=lambda index: prices[index])
-
-
 def _lineup_status(roster_a: tuple[str, ...], roster_b: tuple[str, ...],
                    last_games: dict[str, str], teams: tuple[str, str],
                    now: datetime, max_age_days: int) -> str:
@@ -128,8 +99,6 @@ def _lineup_status(roster_a: tuple[str, ...], roster_b: tuple[str, ...],
     if len(roster_a) != 5 or len(roster_b) != 5:
         return "未知"
     return "完整" if _roster_fresh(last_games, teams, now, max_age_days) else "过期"
-
-
 def _paper_daily_report(rows: list[dict], bankroll: float,
                         committed_fraction: float, max_daily_risk_fraction: float) -> dict:
     bets = [row for row in rows if row.get("action") == "BET"]
@@ -151,7 +120,6 @@ def _paper_daily_report(rows: list[dict], bankroll: float,
         "remaining_limit": max(0.0, bankroll * (max_daily_risk_fraction - committed_fraction)),
         "by_sport": by_sport,
     }
-
 def _find_schedule_match(schedule_matches: list[dict] | None, sport: str,
                          team_a: str, team_b: str, scheduled: datetime | None) -> dict | None:
     if not schedule_matches or scheduled is None:
@@ -170,28 +138,23 @@ def _find_schedule_match(schedule_matches: list[dict] | None, sport: str,
         if abs((scheduled - start).total_seconds()) <= 90 * 60:
             return row
     return None
-
-
 def _start(market: dict) -> datetime | None:
     value = market.get("gameStartTime")
     if not value:
         return None
     return datetime.fromisoformat(str(value).replace("Z", "+00:00")).astimezone(timezone.utc)
-
-
 def _main_market(event: dict) -> dict | None:
     markets = event.get("markets", [])
     candidates = [m for m in markets if m.get("gameStartTime")]
     return next((m for m in candidates if m.get("sportsMarketType") == "moneyline"), None) or next(
         (m for m in candidates if m.get("question") == event.get("title")), None)
-
-
 def analyze_sport(sport: str, model: EloModel | NbaModel, evaluation: dict, events: list[dict], *,
                   now: datetime, bankroll: float, estimated_cost: float | None = None,
                   schedule_matches: list[dict] | None = None,
                   risk_config: RiskConfig | None = None,
                   ledger: RiskBudgetLedger | None = None,
-                  group_key: str | None = None) -> list[dict]:
+                  group_key: str | None = None,
+                  paper_db: str | Path | None = None) -> list[dict]:
     risk_config = risk_config or RiskConfig()
     if ledger is None:
         ledger = RiskBudgetLedger(risk_config, bankroll)
@@ -294,15 +257,15 @@ def analyze_sport(sport: str, model: EloModel | NbaModel, evaluation: dict, even
             "direction_match": bool(direction_match),
             "reasons": reasons + list(rec.reasons),
         })
+        _attach_bet_fields(row, model_probability=model_probability,
+                           execution_price=ask, bankroll=bankroll,
+                           cap=cap, paper_db=paper_db)
         if started:
             row.update({"decision_probability": None, "raw_edge": None, "edge": None,
                         "expected_value": None, "execution_price": None})
         row["narrative_summary"] = build_pre_match_summary(row)
         rows.append(row)
     return rows
-
-
-
 def _roster_fresh(last_games: dict[str, str], teams: tuple[str, str], now: datetime,
                   max_age_days: int) -> bool:
     dates = []
@@ -313,8 +276,54 @@ def _roster_fresh(last_games: dict[str, str], teams: tuple[str, str], now: datet
         parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
         dates.append(parsed.replace(tzinfo=parsed.tzinfo or timezone.utc))
     return all((now.date() - value.date()).days <= max_age_days for value in dates)
-
-
+def _virtual_stake(model_probability: float | None, execution_price: float | None,
+                    bankroll: float, cap: float) -> float:
+    """Compute 1/4-Kelly virtual stake, capped by the active risk budget."""
+    if (model_probability is None or execution_price is None or execution_price <= 0
+            or bankroll <= 0 or cap <= 0):
+        return 0.0
+    decimal_odds = 1.0 / float(execution_price)
+    fraction = kelly_fraction(float(model_probability), decimal_odds) * 0.25
+    return round(float(bankroll) * min(max(0.0, cap), max(0.0, fraction)), 2)
+def _attach_bet_fields(row: dict, *, model_probability: float | None,
+                       execution_price: float | None, bankroll: float,
+                       cap: float, paper_db: str | Path | None) -> dict:
+    """Attach cold-start virtual-betting metadata to a recommendation row."""
+    virtual_ok, virtual_reason = should_place_virtual_bet(row)
+    row["virtual_bet"] = virtual_ok
+    row["virtual_bet_reason"] = virtual_reason
+    row["stake_virtual"] = (_virtual_stake(model_probability, execution_price, bankroll, cap)
+                            if virtual_ok else 0.0)
+    row["bet_status"] = bet_status(row, paper_db)
+    row["real_bet_reason"] = can_place_real_bet(row, paper_db)[1] if virtual_ok else ""
+    return row
+def _patch_meta_context(model, sport: str, roster_a, roster_b) -> tuple[list[str], float | None, float | None]:
+    """Derive top patch heroes and each roster's coverage from the frozen model."""
+    if sport != "lol" or not hasattr(model, "patch_champion_ratings"):
+        return [], None, None
+    keys = list(getattr(model, "patch_champion_ratings", {}).keys())
+    patches = sorted({str(key).split("|", 1)[0] for key in keys if "|" in str(key)})
+    patch = os.getenv("LOL_CURRENT_PATCH") or (patches[-1] if patches else "")
+    if not patch:
+        return [], None, None
+    heroes = sorted(
+        ((str(key).split("|", 1)[1], float(rating))
+         for key, rating in model.patch_champion_ratings.items()
+         if str(key).startswith(patch + "|") and "|" in str(key)),
+        key=lambda item: item[1], reverse=True,
+    )[:5]
+    if not heroes:
+        return [], None, None
+    hero_names = [hero for hero, _ in heroes]
+    def coverage(roster):
+        if not roster or len(hero_names) != 5:
+            return None
+        covered = 0
+        for hero in hero_names:
+            if any(f"{player}|{hero}" in model.player_champion_ratings for player in roster):
+                covered += 1
+        return covered / 5 * 100.0
+    return hero_names, coverage(roster_a), coverage(roster_b)
 def _market_rows(events: list[dict], now: datetime) -> list[tuple[dict, dict, datetime | None, list[str], list[float]]]:
     result = []
     for event in events:
@@ -329,8 +338,6 @@ def _market_rows(events: list[dict], now: datetime) -> list[tuple[dict, dict, da
         if len(outcomes) == 2 and len(prices) == 2 and min(prices) > 0:
             result.append((event, market, scheduled, outcomes, prices))
     return result
-
-
 def _research_row(sport: str, event: dict, market: dict, scheduled: datetime | None,
                   outcomes: list[str], prices: list[float], probabilities: list[float], *,
                   probability_ok: bool, money_ok: bool, now: datetime, bankroll: float,
@@ -339,7 +346,8 @@ def _research_row(sport: str, event: dict, market: dict, scheduled: datetime | N
                   risk_config: RiskConfig | None = None,
                   ledger: RiskBudgetLedger | None = None,
                   group_key: str | None = None,
-                  lineup_status: str = "未知") -> dict:
+                  lineup_status: str = "未知",
+                  paper_db: str | Path | None = None) -> dict:
     risk_config = risk_config or RiskConfig()
     if ledger is None:
         ledger = RiskBudgetLedger(risk_config, bankroll)
@@ -411,20 +419,21 @@ def _research_row(sport: str, event: dict, market: dict, scheduled: datetime | N
         "direction_match": bool(direction_match),
         "reasons": reasons + list(rec.reasons),
     })
+    _attach_bet_fields(row, model_probability=model_probability,
+                       execution_price=ask, bankroll=bankroll,
+                       cap=cap, paper_db=paper_db)
     if started:
         row.update({"decision_probability": None, "raw_edge": None, "edge": None,
                     "expected_value": None, "execution_price": None})
     row["narrative_summary"] = build_pre_match_summary(row)
     return row
-
-
-
 def analyze_cs2(model: Cs2Model, evaluation: dict, events: list[dict], *,
                 now: datetime, bankroll: float,
                 schedule_matches: list[dict] | None = None,
                 risk_config: RiskConfig | None = None,
                 ledger: RiskBudgetLedger | None = None,
-                group_key: str | None = None) -> list[dict]:
+                group_key: str | None = None,
+                paper_db: str | Path | None = None) -> list[dict]:
     rows = []
     for event, market, scheduled, outcomes, prices in _market_rows(events, now):
         schedule_match = _find_schedule_match(schedule_matches, "cs2", outcomes[0], outcomes[1], scheduled)
@@ -443,21 +452,33 @@ def analyze_cs2(model: Cs2Model, evaluation: dict, events: list[dict], *,
             f"历史样本：{a} {model.team_games.get(a, 0)} 场，{b} {model.team_games.get(b, 0)} 场。",
             "当前基线包含战队和五人阵容强度；地图池、veto 与 LAN/线上层仍在补充。",
         ]
-        rows.append(_research_row("cs2", event, market, scheduled, outcomes, prices,
-                                  [probability, 1-probability], probability_ok=probability_ok,
-                                  money_ok=bool(evaluation.get("approved_for_real_money")),
-                                  now=now, bankroll=bankroll, reasons=reasons,
-                                  schedule_matches=schedule_matches, risk_config=risk_config, ledger=ledger, group_key=group_key,
-                                  lineup_status=lineup_status))
+        row = _research_row("cs2", event, market, scheduled, outcomes, prices,
+                             [probability, 1-probability], probability_ok=probability_ok,
+                             money_ok=bool(evaluation.get("approved_for_real_money")),
+                             now=now, bankroll=bankroll, reasons=reasons,
+                             schedule_matches=schedule_matches, risk_config=risk_config, ledger=ledger, group_key=group_key,
+                             lineup_status=lineup_status, paper_db=paper_db)
+        row.update({
+            "lineup_a": player_display_names("cs2", roster_a),
+            "lineup_b": player_display_names("cs2", roster_b),
+            "recent_form_a": recent_form_for("cs2", a),
+            "recent_form_b": recent_form_for("cs2", b),
+            "best_of": int(schedule_match.get("best_of") or 0) if schedule_match else 1,
+            "format": f"BO{int(schedule_match.get('best_of') or 1)}" if schedule_match else "BO1",
+            "map_strengths_a": [],
+            "map_strengths_b": [],
+            "sample_a": model.team_games.get(a, 0),
+            "sample_b": model.team_games.get(b, 0),
+        })
+        rows.append(row)
     return rows
-
-
 def analyze_lol_meta(model: LolMetaModel, evaluation: dict, events: list[dict], *,
                      now: datetime, bankroll: float,
                      schedule_matches: list[dict] | None = None,
                      risk_config: RiskConfig | None = None,
                      ledger: RiskBudgetLedger | None = None,
-                     group_key: str | None = None) -> list[dict]:
+                     group_key: str | None = None,
+                     paper_db: str | Path | None = None) -> list[dict]:
     rows = []
     for event, market, scheduled, outcomes, prices in _market_rows(events, now):
         if not _is_major_lol_event(event.get("title")):
@@ -483,18 +504,29 @@ def analyze_lol_meta(model: LolMetaModel, evaluation: dict, events: list[dict], 
             f"历史样本：{a} {model.team_games.get(a, 0)} 局，{b} {model.team_games.get(b, 0)} 局。",
             "BP 未开始时不使用英雄选择；BP 完成后必须重新计算版本英雄强度与选手英雄熟练度。",
         ]
-        rows.append(_research_row("lol", event, market, scheduled, outcomes, prices,
-                                  [probability, 1-probability], probability_ok=probability_ok,
-                                  money_ok=bool(evaluation.get("approved_for_real_money")),
-                                  now=now, bankroll=bankroll, reasons=reasons,
-                                  schedule_matches=schedule_matches, risk_config=risk_config, ledger=ledger, group_key=group_key,
-                                  lineup_status=lineup_status))
+        heroes, coverage_a, coverage_b = _patch_meta_context(model, "lol", roster_a, roster_b)
+        row = _research_row("lol", event, market, scheduled, outcomes, prices,
+                            [probability, 1-probability], probability_ok=probability_ok,
+                            money_ok=bool(evaluation.get("approved_for_real_money")),
+                            now=now, bankroll=bankroll, reasons=reasons,
+                            schedule_matches=schedule_matches, risk_config=risk_config, ledger=ledger, group_key=group_key,
+                            lineup_status=lineup_status, paper_db=paper_db)
+        row.update({
+            "lineup_a": player_display_names("lol", roster_a),
+            "lineup_b": player_display_names("lol", roster_b),
+            "recent_form_a": recent_form_for("lol", a),
+            "recent_form_b": recent_form_for("lol", b),
+            "best_of": best_of,
+            "format": f"BO{best_of}",
+            "patch_meta_heroes": heroes,
+            "meta_coverage_a": coverage_a,
+            "meta_coverage_b": coverage_b,
+            "sample_a": model.team_games.get(a, 0),
+            "sample_b": model.team_games.get(b, 0),
+        })
+        rows.append(row)
     return rows
-
-
 FLAG_DISAGREEMENT_DEFAULT = 0.10
-
-
 def flag_rows(rows: list[dict], flag_threshold: float = FLAG_DISAGREEMENT_DEFAULT) -> list[dict]:
     """Tag rows needing human review and return them in a separate bucket."""
     flagged = []
@@ -506,8 +538,6 @@ def flag_rows(rows: list[dict], flag_threshold: float = FLAG_DISAGREEMENT_DEFAUL
         if row["flagged"]:
             flagged.append(row)
     return flagged
-
-
 def run_all(model_dir: str | Path, output: str | Path, *, now: datetime | None = None,
             report_day=None) -> dict:
     now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
@@ -519,7 +549,6 @@ def run_all(model_dir: str | Path, output: str | Path, *, now: datetime | None =
     paper_db = os.getenv("PAPER_DB_PATH", "data/daily/paper.db")
     ledger.load_prior(paper_db, report_day.isoformat())
     try:
-        from .paper_store import current_drawdown
         drawdown = current_drawdown(paper_db, bankroll) if Path(paper_db).exists() else 0.0
     except Exception:
         logging.exception("run_all: unable to compute drawdown from paper_store")
@@ -546,7 +575,6 @@ def run_all(model_dir: str | Path, output: str | Path, *, now: datetime | None =
         registry_path=os.getenv("WATCHER_REGISTRY_PATH", "data/daily/watcher_registry.json"),
         market_search=market_search,
     )
-
     def external_source(name, sport, call):
         try:
             events = call()
@@ -559,7 +587,6 @@ def run_all(model_dir: str | Path, output: str | Path, *, now: datetime | None =
         except Exception as error:
             logging.exception("external_source %s failed", name)
             return SourceResult(name, False, [], repr(error))
-
     nba_sources = [
         external_source("nba_official", "nba", lambda: NbaOfficialProvider().schedule(report_day)),
         external_source("espn", "nba", lambda: EspnNbaProvider().schedule(report_day)),
@@ -614,15 +641,18 @@ def run_all(model_dir: str | Path, output: str | Path, *, now: datetime | None =
         if sport == "cs2":
             sport_rows = analyze_cs2(model, evaluation, events, now=now, bankroll=bankroll,
                                      schedule_matches=audit_matches[sport], risk_config=risk_config,
-                                     ledger=ledger, group_key=f"{sport}:{report_day.isoformat()}")
+                                     ledger=ledger, group_key=f"{sport}:{report_day.isoformat()}",
+                                     paper_db=paper_db)
         elif sport == "lol":
             sport_rows = analyze_lol_meta(model, evaluation, events, now=now, bankroll=bankroll,
                                           schedule_matches=audit_matches[sport], risk_config=risk_config,
-                                          ledger=ledger, group_key=f"{sport}:{report_day.isoformat()}")
+                                          ledger=ledger, group_key=f"{sport}:{report_day.isoformat()}",
+                                          paper_db=paper_db)
         else:
             sport_rows = analyze_sport(sport, model, evaluation, events, now=now, bankroll=bankroll,
                                        schedule_matches=audit_matches[sport], risk_config=risk_config,
-                                       ledger=ledger, group_key=f"{sport}:{report_day.isoformat()}")
+                                       ledger=ledger, group_key=f"{sport}:{report_day.isoformat()}",
+                                       paper_db=paper_db)
         recommendations.extend(sport_rows)
         statuses[sport] = {
             "ready": True, "artifact_ready": True,
@@ -656,6 +686,24 @@ def run_all(model_dir: str | Path, output: str | Path, *, now: datetime | None =
         for row in recommendations:
             row["flagged"] = True
         flagged = list(recommendations)
+    for row in recommendations:
+        if row.get("virtual_bet"):
+            record_virtual_bet(paper_db, {
+                "sport": row.get("sport"),
+                "event_id": row.get("event_id"),
+                "event": row.get("event"),
+                "generated_at": row.get("generated_at"),
+                "bet_side": row.get("outcome"),
+                "model_prob": row.get("model_probability"),
+                "market_odds": (1.0 / float(row["execution_price"])
+                                if row.get("execution_price") else 0.0),
+                "stake_virtual": row.get("stake_virtual") or 0.0,
+            })
+    virtual_betting = {
+        "count": count_virtual_bets(paper_db),
+        "roi": calc_roi(paper_db, bet_type="virtual"),
+        "balance": virtual_account_balance(paper_db, bankroll),
+    }
     paper_daily = _paper_daily_report(
         recommendations, bankroll, ledger.daily_committed, risk_config.max_daily_risk_fraction,
     )
@@ -677,6 +725,7 @@ def run_all(model_dir: str | Path, output: str | Path, *, now: datetime | None =
         "flagged": flagged,
         "flag_threshold": flag_threshold,
         "paper_daily": paper_daily,
+        "virtual_betting": virtual_betting,
         "risk_notes": risk_notes,
         "model_staleness": model_staleness,
         "risk_status": {
@@ -693,6 +742,7 @@ def run_all(model_dir: str | Path, output: str | Path, *, now: datetime | None =
             "warn_reason": ledger.warn_reason,
             "daily_committed_fraction": ledger.daily_committed,
             "current_drawdown": drawdown,
+            "virtual_betting": virtual_betting,
             "circuit_breaker": ledger.breaker_reason is not None,
             "circuit_breaker_reason": ledger.breaker_reason,
         },

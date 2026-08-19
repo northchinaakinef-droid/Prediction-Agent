@@ -52,6 +52,20 @@ CREATE TABLE IF NOT EXISTS predictions (
     archived INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS predictions_event_idx ON predictions(sport, event_id, generated_at);
+CREATE TABLE IF NOT EXISTS virtual_bets (
+    match_id TEXT PRIMARY KEY,
+    sport TEXT NOT NULL,
+    event_id TEXT NOT NULL,
+    event TEXT,
+    generated_at TEXT NOT NULL,
+    bet_side TEXT NOT NULL,
+    model_prob REAL NOT NULL,
+    market_odds REAL NOT NULL,
+    stake_virtual REAL NOT NULL,
+    result TEXT,
+    pnl_virtual REAL,
+    payload_json TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS post_match_reviews (
     review_id TEXT PRIMARY KEY,
     sport TEXT NOT NULL,
@@ -203,6 +217,82 @@ def record_report(path: str | Path, report: dict[str, Any]) -> dict[str, int | s
         total = connection.execute("SELECT COUNT(*) FROM predictions").fetchone()[0]
     return {"run_id": run_id, "new_run": int(new_run), "inserted_predictions": inserted,
             "total_predictions": int(total)}
+
+
+def record_virtual_bet(path: str | Path, row: dict[str, Any]) -> bool:
+    """Persist one cold-start virtual bet; repeated writes are idempotent."""
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    match_id = _id(row.get("sport"), row.get("event_id"), row.get("bet_side"),
+                   row.get("generated_at"))
+    with closing(sqlite3.connect(target)) as connection:
+        connection.executescript(SCHEMA)
+        cursor = connection.execute(
+            """INSERT OR IGNORE INTO virtual_bets
+               (match_id, sport, event_id, event, generated_at, bet_side,
+                model_prob, market_odds, stake_virtual, result, pnl_virtual, payload_json)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (match_id, str(row.get("sport", "")), str(row.get("event_id", "")),
+             row.get("event"), str(row.get("generated_at", "")),
+             str(row.get("bet_side", "")), float(row.get("model_prob") or 0),
+             float(row.get("market_odds") or 0), float(row.get("stake_virtual") or 0),
+             row.get("result"), row.get("pnl_virtual"),
+             json.dumps(row, ensure_ascii=False)),
+        )
+        connection.commit()
+    return cursor.rowcount == 1
+
+
+def count_virtual_bets(path: str | Path) -> int:
+    """Return the number of virtual bets currently recorded."""
+    target = Path(path)
+    if not target.exists():
+        return 0
+    with closing(sqlite3.connect(target)) as connection:
+        connection.executescript(SCHEMA)
+        row = connection.execute("SELECT COUNT(*) FROM virtual_bets").fetchone()
+    return int(row[0] or 0)
+
+
+def calc_roi(path: str | Path, bet_type: str = "virtual", last_n: int | None = None) -> float | None:
+    """Return ROI for settled virtual or real bets, optionally over the last N."""
+    target = Path(path)
+    if not target.exists():
+        return None
+    with closing(sqlite3.connect(target)) as connection:
+        connection.executescript(SCHEMA)
+        if bet_type == "virtual":
+            rows = connection.execute(
+                """SELECT stake_virtual, pnl_virtual FROM virtual_bets
+                   WHERE result IS NOT NULL AND pnl_virtual IS NOT NULL
+                   ORDER BY generated_at DESC"""
+            ).fetchall()
+        elif bet_type == "real":
+            rows = connection.execute(
+                """SELECT stake, settled_profit FROM predictions
+                   WHERE action='BET' AND settled_profit IS NOT NULL AND stake > 0
+                   ORDER BY generated_at DESC"""
+            ).fetchall()
+        else:
+            raise ValueError(f"unsupported bet_type: {bet_type}")
+    if last_n is not None:
+        rows = rows[:last_n]
+    profit = sum(float(row[1] or 0) for row in rows)
+    turnover = sum(float(row[0] or 0) for row in rows)
+    return profit / turnover if turnover > 0 else None
+
+
+def virtual_account_balance(path: str | Path, bankroll: float) -> float:
+    """Return paper bankroll plus settled virtual PnL."""
+    target = Path(path)
+    if not target.exists():
+        return float(bankroll)
+    with closing(sqlite3.connect(target)) as connection:
+        connection.executescript(SCHEMA)
+        row = connection.execute(
+            "SELECT COALESCE(SUM(pnl_virtual), 0) FROM virtual_bets WHERE pnl_virtual IS NOT NULL"
+        ).fetchone()
+    return float(bankroll) + float(row[0] or 0)
 
 
 def record_post_match_review(path: str | Path, review: dict[str, Any]) -> None:
