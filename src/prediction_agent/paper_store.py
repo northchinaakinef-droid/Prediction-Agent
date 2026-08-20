@@ -64,6 +64,8 @@ CREATE TABLE IF NOT EXISTS virtual_bets (
     stake_virtual REAL NOT NULL,
     result TEXT,
     pnl_virtual REAL,
+    prediction_stage VARCHAR(10) NOT NULL DEFAULT 'PREMATCH'
+        CHECK (prediction_stage IN ('PREMATCH', 'POSTMATCH')),
     payload_json TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS post_match_reviews (
@@ -166,6 +168,17 @@ def _migrate_predictions(connection: sqlite3.Connection) -> None:
             connection.execute(f"ALTER TABLE predictions ADD COLUMN {definition}")
 
 
+def _migrate_virtual_bets(connection: sqlite3.Connection) -> None:
+    """Add the prediction-stage constraint to existing paper databases."""
+    columns = {row[1] for row in connection.execute("PRAGMA table_info(virtual_bets)")}
+    if "prediction_stage" not in columns:
+        connection.execute(
+            """ALTER TABLE virtual_bets ADD COLUMN prediction_stage VARCHAR(10)
+               NOT NULL DEFAULT 'PREMATCH'
+               CHECK (prediction_stage IN ('PREMATCH', 'POSTMATCH'))"""
+        )
+
+
 def record_report(path: str | Path, report: dict[str, Any]) -> dict[str, int | str]:
     """Persist one immutable report and its rows; retries are idempotent."""
     target = Path(path)
@@ -227,11 +240,13 @@ def record_virtual_bet(path: str | Path, row: dict[str, Any]) -> bool:
                    row.get("generated_at"))
     with closing(sqlite3.connect(target)) as connection:
         connection.executescript(SCHEMA)
+        _migrate_virtual_bets(connection)
         cursor = connection.execute(
             """INSERT OR IGNORE INTO virtual_bets
                (match_id, sport, event_id, event, generated_at, bet_side,
-                model_prob, market_odds, stake_virtual, result, pnl_virtual, payload_json)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                model_prob, market_odds, stake_virtual, result, pnl_virtual,
+                prediction_stage, payload_json)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PREMATCH', ?)""",
             (match_id, str(row.get("sport", "")), str(row.get("event_id", "")),
              row.get("event"), str(row.get("generated_at", "")),
              str(row.get("bet_side", "")), float(row.get("model_prob") or 0),
@@ -250,6 +265,7 @@ def count_virtual_bets(path: str | Path) -> int:
         return 0
     with closing(sqlite3.connect(target)) as connection:
         connection.executescript(SCHEMA)
+        _migrate_virtual_bets(connection)
         row = connection.execute("SELECT COUNT(*) FROM virtual_bets").fetchone()
     return int(row[0] or 0)
 
@@ -261,11 +277,13 @@ def count_settled_virtual_bets(path: str | Path) -> int:
         return 0
     with closing(sqlite3.connect(target)) as connection:
         connection.executescript(SCHEMA)
+        _migrate_virtual_bets(connection)
         row = connection.execute(
             """SELECT COUNT(*) FROM virtual_bets v
                LEFT JOIN settlements s ON s.sport=v.sport AND s.event_id=v.event_id
-               WHERE (v.result IS NOT NULL AND v.pnl_virtual IS NOT NULL)
-                  OR s.winner IS NOT NULL"""
+               WHERE v.prediction_stage = 'PREMATCH'
+                 AND ((v.result IS NOT NULL AND v.pnl_virtual IS NOT NULL)
+                      OR s.winner IS NOT NULL)"""
         ).fetchone()
     return int(row[0] or 0)
 
@@ -277,14 +295,16 @@ def calc_roi(path: str | Path, bet_type: str = "virtual", last_n: int | None = N
         return None
     with closing(sqlite3.connect(target)) as connection:
         connection.executescript(SCHEMA)
+        _migrate_virtual_bets(connection)
         if bet_type == "virtual":
             rows = connection.execute(
                 """SELECT v.stake_virtual, v.pnl_virtual, v.bet_side,
                           v.market_odds, COALESCE(v.result, s.winner)
                    FROM virtual_bets v
                    LEFT JOIN settlements s ON s.sport=v.sport AND s.event_id=v.event_id
-                   WHERE (v.result IS NOT NULL AND v.pnl_virtual IS NOT NULL)
-                      OR s.winner IS NOT NULL
+                   WHERE v.prediction_stage = 'PREMATCH'
+                     AND ((v.result IS NOT NULL AND v.pnl_virtual IS NOT NULL)
+                          OR s.winner IS NOT NULL)
                    ORDER BY v.generated_at DESC"""
             ).fetchall()
         elif bet_type == "real":
@@ -318,13 +338,15 @@ def virtual_account_balance(path: str | Path, bankroll: float) -> float:
         return float(bankroll)
     with closing(sqlite3.connect(target)) as connection:
         connection.executescript(SCHEMA)
+        _migrate_virtual_bets(connection)
         rows = connection.execute(
             """SELECT v.stake_virtual, v.pnl_virtual, v.bet_side,
                       v.market_odds, COALESCE(v.result, s.winner)
                FROM virtual_bets v
                LEFT JOIN settlements s ON s.sport=v.sport AND s.event_id=v.event_id
-               WHERE (v.result IS NOT NULL AND v.pnl_virtual IS NOT NULL)
-                  OR s.winner IS NOT NULL"""
+               WHERE v.prediction_stage = 'PREMATCH'
+                 AND ((v.result IS NOT NULL AND v.pnl_virtual IS NOT NULL)
+                      OR s.winner IS NOT NULL)"""
         ).fetchall()
     profit = sum(
         float(row[1]) if row[1] is not None else _paper_bet_profit(

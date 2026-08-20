@@ -126,6 +126,47 @@ class PaperStoreVirtualTests(unittest.TestCase):
             self.assertEqual(count_settled_virtual_bets(db), 1)
             self.assertGreater(calc_roi(db, bet_type="virtual"), 0)
 
+    def test_postmatch_virtual_bet_is_excluded_from_roi_and_unlock_count(self):
+        with tempfile.TemporaryDirectory() as temp:
+            db = Path(temp) / "paper.db"
+            record_virtual_bet(db, {
+                "sport": "lol", "event_id": "prematch-placeholder", "event": "A vs B",
+                "generated_at": "2026-08-19T00:00:00+00:00", "bet_side": "A",
+                "model_prob": .6, "market_odds": 2.0, "stake_virtual": 10.0,
+                "prediction_stage": "POSTMATCH",
+            })
+            connection = sqlite3.connect(db)
+            try:
+                stored_stage = connection.execute(
+                    "SELECT prediction_stage FROM virtual_bets"
+                ).fetchone()[0]
+                self.assertEqual(stored_stage, "PREMATCH")
+                connection.execute("DELETE FROM virtual_bets")
+                connection.execute(
+                    """INSERT INTO virtual_bets
+                       (match_id, sport, event_id, event, generated_at, bet_side,
+                        model_prob, market_odds, stake_virtual, result, pnl_virtual,
+                        prediction_stage, payload_json)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    ("postmatch-1", "lol", "e1", "A vs B",
+                     "2026-08-19T02:00:00+00:00", "A", .75, 2.0, 10.0,
+                     "A", 10.0, "POSTMATCH", "{}"),
+                )
+                with self.assertRaises(sqlite3.IntegrityError):
+                    connection.execute(
+                        """INSERT INTO virtual_bets
+                           (match_id, sport, event_id, generated_at, bet_side, model_prob,
+                            market_odds, stake_virtual, prediction_stage, payload_json)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        ("invalid-1", "lol", "e2", "2026-08-19T03:00:00+00:00",
+                         "A", .75, 2.0, 10.0, "INVALID", "{}"),
+                    )
+                connection.commit()
+            finally:
+                connection.close()
+            self.assertEqual(count_settled_virtual_bets(db), 0)
+            self.assertIsNone(calc_roi(db, bet_type="virtual"))
+
 
 class DeliveryReformTests(unittest.TestCase):
     def test_prematch_reference_format(self):
