@@ -10,7 +10,7 @@ from urllib.request import Request, urlopen
 def get_json(url: str, params: dict[str, object] | None = None, timeout: float = 15) -> Any:
     if params:
         url = f"{url}?{urlencode(params)}"
-    request = Request(url, headers={"Accept": "application/json", "User-Agent": "prediction-agent/0.1"})
+    request = Request(url, headers={"Accept": "application/json", "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"})
     with urlopen(request, timeout=timeout) as response:
         return json.loads(response.read().decode("utf-8"))
 
@@ -24,7 +24,7 @@ def post_json(
     attempts: int = 3,
 ) -> Any:
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-    request_headers = {"Content-Type": "application/json; charset=utf-8", "User-Agent": "prediction-agent/0.1"}
+    request_headers = {"Content-Type": "application/json; charset=utf-8", "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"}
     request_headers.update(headers or {})
     error: Exception | None = None
     for attempt in range(attempts):
