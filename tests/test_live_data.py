@@ -1,16 +1,20 @@
 from datetime import date
 import os
+from pathlib import Path
 import unittest
 from unittest.mock import patch
 
 from prediction_agent.providers.live_data import (
-    Bo3Cs2Provider, DataSourceUnavailable, EspnNbaProvider, GridOpenAccessProvider,
+    Bo3Cs2Provider, DataSourceUnavailable, EspnCoreNbaProvider, EspnNbaProvider,
+    GridOpenAccessProvider, HupuNbaProvider,
     LeaguepediaDraftProvider, NbaBoxscoreProvider, PandaScoreProvider, RiotEsportsProvider,
     SportSrcNbaProvider, TheSportsDbNbaProvider,
 )
 
 
 class LiveDataProviderTests(unittest.TestCase):
+    fixtures = Path(__file__).with_name("fixtures")
+
     @patch("prediction_agent.providers.live_data._get_json")
     def test_espn_schedule_parses_canonical_event(self, get_json):
         get_json.return_value = {"events": [{
@@ -24,6 +28,52 @@ class LiveDataProviderTests(unittest.TestCase):
         rows = EspnNbaProvider().schedule(date(2026, 8, 14))
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0].team_a, "Boston Celtics")
+
+    def test_hupu_schedule_filters_week_page_to_requested_day(self):
+        page = (self.fixtures / "hupu_schedule.html").read_text(encoding="utf-8")
+        rows = HupuNbaProvider.parse_schedule(page, date(2026, 8, 20))
+        self.assertEqual([row.source_id for row in rows], ["167819", "167820"])
+        self.assertEqual((rows[0].team_a, rows[0].team_b),
+                         ("Boston Celtics", "Los Angeles Lakers"))
+        self.assertEqual(rows[0].start_time.isoformat(), "2026-08-20T08:00:00+08:00")
+        self.assertNotIn("167821", {row.source_id for row in rows})
+
+    @patch("prediction_agent.providers.live_data._get_json")
+    def test_espn_core_schedule_resolves_event_references(self, get_json):
+        index = {"items": [{"$ref": "http://sports.core.api.espn.com/events/401"}]}
+        event = {"id": "401", "date": "2026-08-20T12:00Z",
+                 "name": "Boston Celtics at Los Angeles Lakers"}
+        get_json.side_effect = [index, event]
+        rows = EspnCoreNbaProvider().schedule(date(2026, 8, 20))
+        self.assertEqual(len(rows), 1)
+        self.assertEqual((rows[0].team_a, rows[0].team_b),
+                         ("Boston Celtics", "Los Angeles Lakers"))
+        self.assertEqual(rows[0].source, "espn_core")
+        self.assertEqual(get_json.call_args_list[0].kwargs["params"]["dates"], "20260819")
+        self.assertTrue(get_json.call_args_list[1].args[0].startswith("https://"))
+
+    def test_hupu_boxscore_normalizes_team_and_player_stats(self):
+        page = (self.fixtures / "hupu_boxscore.html").read_text(encoding="utf-8")
+        box = HupuNbaProvider.parse_boxscore(page, "167819")
+        self.assertIsNotNone(box)
+        self.assertEqual(box["game_status"], "FINISHED")
+        self.assertEqual(box["game_time_utc"], "2026-08-20T00:00:00+00:00")
+        self.assertEqual(box["away_team"]["team_name"], "Boston Celtics")
+        self.assertEqual(box["home_team"]["team_name"], "Los Angeles Lakers")
+        self.assertEqual(box["away_team"]["statistics"]["fieldGoalsAttempted"], 90)
+        self.assertEqual(box["home_team"]["statistics"]["turnoversTotal"], 10)
+        self.assertEqual(box["home_team"]["players"][0]["person_id"], 2544)
+        self.assertEqual(box["home_team"]["players"][0]["minutes_seconds"], 2280.0)
+        self.assertTrue(box["home_team"]["winner"])
+
+    def test_hupu_live_surfaces_when_all_boxscores_are_unavailable(self):
+        page = (self.fixtures / "hupu_schedule.html").read_text(encoding="utf-8")
+        events = HupuNbaProvider.parse_schedule(page, date(2026, 8, 20))
+        provider = HupuNbaProvider()
+        with patch.object(provider, "schedule", return_value=events), \
+                patch.object(provider, "boxscore", side_effect=DataSourceUnavailable("blocked")):
+            with self.assertRaisesRegex(DataSourceUnavailable, "no readable NBA boxscore"):
+                provider.live(date(2026, 8, 20))
 
     def test_grid_missing_key_is_explicitly_unavailable(self):
         with patch.dict(os.environ, {}, clear=True):

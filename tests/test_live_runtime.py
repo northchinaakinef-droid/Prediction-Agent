@@ -4,6 +4,7 @@ import tempfile
 import unittest
 import json
 from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
 from zoneinfo import ZoneInfo
 from pathlib import Path
 
@@ -350,6 +351,24 @@ class LiveRuntimeTests(unittest.TestCase):
         self.assertIn("home_four_factors", samples[0]["metrics"])
         self.assertIn("pace", samples[0]["metrics"])
         self.assertTrue(samples[0]["decisive_factors"])
+
+    def test_nba_game_details_falls_back_to_hupu_boxscore(self):
+        now = datetime.now(timezone.utc)
+        with tempfile.TemporaryDirectory() as temp:
+            supervisor = LiveSupervisor(root=Path(temp))
+            state = LiveState(
+                "hupu", "167819", "nba", now, "FINISHED",
+                "Boston Celtics", "Los Angeles Lakers", 104, 110,
+                features={"period": 4, "hupu_game_id": "167819"}, finished=True,
+            )
+            with patch.object(supervisor, "_attempt", return_value=[]), \
+                    patch("prediction_agent.live_runtime.NbaBoxscoreProvider.boxscore") as nba_boxscore, \
+                    patch("prediction_agent.live_runtime.HupuNbaProvider.boxscore",
+                          return_value=_nba_boxscore()) as hupu_boxscore:
+                details = supervisor._nba_game_details([state])
+        nba_boxscore.assert_not_called()
+        hupu_boxscore.assert_called_once_with("167819")
+        self.assertEqual(details[match_key(state)][0]["home_team"]["score"], 110)
 
     def test_nba_review_analysis_is_analyst_grade(self):
         now = datetime.now(timezone.utc)

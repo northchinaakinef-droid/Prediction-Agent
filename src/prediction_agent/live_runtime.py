@@ -13,7 +13,7 @@ from .entities import canonical_team, normalized_name
 from .live_engine import LiveAlert, LiveAnalysisEngine, LiveStore, match_key
 from . import nba_analytics
 from .providers.live_data import (
-    Bo3Cs2Provider, DataSourceUnavailable, EspnNbaProvider, GridOpenAccessProvider,
+    Bo3Cs2Provider, DataSourceUnavailable, EspnNbaProvider, GridOpenAccessProvider, HupuNbaProvider,
     LeaguepediaDraftProvider, NbaBoxscoreProvider, NbaOfficialProvider, PandaScoreProvider,
     RiotEsportsProvider, TheSportsDbNbaProvider,
 )
@@ -388,26 +388,43 @@ class LiveSupervisor:
             official_by_teams.setdefault(key, official_state)
         details: dict[str, list[dict]] = {}
         provider = NbaBoxscoreProvider()
+        hupu_provider = HupuNbaProvider()
         for state in finished_states:
             game_id = self._nba_game_id_for_state(state, official_by_teams)
-            if not game_id:
-                continue
-            name = f"nba_boxscore_{game_id}"
-            try:
-                box = provider.boxscore(game_id)
-                available = box is not None
-                self.source_status[name] = {
-                    "available": available, "rows": 1 if available else 0,
-                    "error": None, "checked_at": datetime.now(timezone.utc).isoformat(),
-                }
-                if box:
-                    details.setdefault(match_key(state), []).append(box)
-            except Exception as error:
-                logging.exception("live_runtime nba boxscore %s failed", game_id)
-                self.source_status[name] = {
-                    "available": False, "rows": 0, "error": repr(error),
-                    "checked_at": datetime.now(timezone.utc).isoformat(),
-                }
+            box = None
+            if game_id:
+                name = f"nba_boxscore_{game_id}"
+                try:
+                    box = provider.boxscore(game_id)
+                    self.source_status[name] = {
+                        "available": box is not None, "rows": 1 if box else 0,
+                        "error": None, "checked_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                except Exception as error:
+                    logging.exception("live_runtime nba boxscore %s failed", game_id)
+                    self.source_status[name] = {
+                        "available": False, "rows": 0, "error": repr(error),
+                        "checked_at": datetime.now(timezone.utc).isoformat(),
+                    }
+            hupu_id = state.features.get("hupu_game_id")
+            if not hupu_id and state.source == "hupu":
+                hupu_id = state.source_id
+            if box is None and hupu_id:
+                name = f"hupu_nba_boxscore_{hupu_id}"
+                try:
+                    box = hupu_provider.boxscore(str(hupu_id))
+                    self.source_status[name] = {
+                        "available": box is not None, "rows": 1 if box else 0,
+                        "error": None, "checked_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                except Exception as error:
+                    logging.exception("live_runtime hupu nba boxscore %s failed", hupu_id)
+                    self.source_status[name] = {
+                        "available": False, "rows": 0, "error": repr(error),
+                        "checked_at": datetime.now(timezone.utc).isoformat(),
+                    }
+            if box:
+                details.setdefault(match_key(state), []).append(box)
         return details
 
     def _compute_nba_box_samples(self, state, game_details: dict[str, list[dict]]) -> list[dict]:
@@ -872,6 +889,7 @@ class LiveSupervisor:
         # Priority order is official/game-server data first, then fixture-score fallbacks.
         groups = [
             ("nba_official", lambda: NbaOfficialProvider().live()),
+            ("hupu_nba", lambda: HupuNbaProvider().live()),
             ("espn_nba", lambda: EspnNbaProvider().live(today)),
             ("thesportsdb_nba", lambda: TheSportsDbNbaProvider().live(today)),
         ]
@@ -920,13 +938,25 @@ class LiveSupervisor:
                     if value not in (None, [], ""):
                         existing.features[field] = value
                 existing.key_events.extend(value for value in state.key_events if value not in existing.key_events)
-                if existing.score_a is None:
-                    existing.score_a = state.score_a
-                if existing.score_b is None:
-                    existing.score_b = state.score_b
-                if state.status == "LIVE":
+                if state.finished or state.status == "FINISHED":
+                    if state.score_a is not None:
+                        existing.score_a = state.score_a
+                    if state.score_b is not None:
+                        existing.score_b = state.score_b
+                    existing.status = "FINISHED"
+                    existing.finished = True
+                elif state.status == "LIVE" and not existing.finished:
+                    if state.score_a is not None:
+                        existing.score_a = state.score_a
+                    if state.score_b is not None:
+                        existing.score_b = state.score_b
                     existing.status = "LIVE"
                     existing.finished = False
+                else:
+                    if existing.score_a is None:
+                        existing.score_a = state.score_a
+                    if existing.score_b is None:
+                        existing.score_b = state.score_b
         return list(states_by_key.values())
 
     def _priors(self, states: list, market_events: dict[str, list[dict]]) -> dict[str, float]:

@@ -4,8 +4,10 @@ import json
 import os
 import html
 import re
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field
 from datetime import date, datetime, timedelta, timezone
+from html.parser import HTMLParser
 from typing import Any
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -20,12 +22,18 @@ class DataSourceUnavailable(RuntimeError):
     pass
 
 
+BROWSER_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+)
+
+
 def _get_json(url: str, *, params: dict[str, object] | None = None,
               headers: dict[str, str] | None = None, timeout: float = 20) -> Any:
     if params:
         url = f"{url}?{urlencode(params)}"
     request_headers = {
-        "Accept": "application/json", "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+        "Accept": "application/json", "User-Agent": BROWSER_USER_AGENT,
         "Referer": "https://www.nba.com/", "Origin": "https://www.nba.com",
     }
     request_headers.update(headers or {})
@@ -35,6 +43,87 @@ def _get_json(url: str, *, params: dict[str, object] | None = None,
             return json.loads(response.read().decode("utf-8"))
     except Exception as error:
         raise DataSourceUnavailable(f"{url}: {error!r}") from error
+
+
+def _get_html(url: str, *, headers: dict[str, str] | None = None, timeout: float = 20) -> str:
+    request_headers = {
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+        "User-Agent": BROWSER_USER_AGENT,
+    }
+    request_headers.update(headers or {})
+    try:
+        with urlopen(Request(url, headers=request_headers), timeout=timeout) as response:
+            return response.read().decode("utf-8", errors="replace")
+    except Exception as error:
+        raise DataSourceUnavailable(f"{url}: {error!r}") from error
+
+
+class _SelectedTableParser(HTMLParser):
+    """Collect rows from the small set of Hupu tables used by this provider."""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.tables: dict[str, list[list[dict[str, Any]]]] = {}
+        self._table: str | None = None
+        self._table_depth = 0
+        self._row: list[dict[str, Any]] | None = None
+        self._cell: dict[str, Any] | None = None
+
+    @staticmethod
+    def _selected(attrs: dict[str, str]) -> str | None:
+        table_id = attrs.get("id")
+        if table_id in {"J_away_content", "J_home_content"}:
+            return str(table_id)
+        classes = set(str(attrs.get("class") or "").split())
+        if "players_table" in classes:
+            return "players_table"
+        if "itinerary_table" in classes:
+            return "itinerary_table"
+        return None
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        attributes = {key: value or "" for key, value in attrs}
+        if tag == "table":
+            if self._table is None:
+                selected = self._selected(attributes)
+                if selected:
+                    self._table = selected
+                    self._table_depth = 1
+                    self.tables.setdefault(selected, [])
+                return
+            self._table_depth += 1
+        if self._table is None:
+            return
+        if tag == "tr":
+            self._row = []
+        elif tag in {"td", "th"} and self._row is not None:
+            self._cell = {"parts": [], "hrefs": []}
+        elif tag == "a" and self._cell is not None and attributes.get("href"):
+            self._cell["hrefs"].append(attributes["href"])
+
+    def handle_data(self, data: str) -> None:
+        if self._cell is not None:
+            self._cell["parts"].append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        if self._table is None:
+            return
+        if tag in {"td", "th"} and self._cell is not None and self._row is not None:
+            self._row.append({
+                "text": " ".join("".join(self._cell["parts"]).split()),
+                "hrefs": list(self._cell["hrefs"]),
+            })
+            self._cell = None
+        elif tag == "tr" and self._row is not None:
+            if self._row:
+                self.tables[self._table].append(self._row)
+            self._row = None
+        elif tag == "table":
+            self._table_depth -= 1
+            if self._table_depth <= 0:
+                self._table = None
+                self._table_depth = 0
 
 
 @dataclass
@@ -169,6 +258,304 @@ class EspnNbaProvider:
                 {"period": int(status.get("period") or 0), "game_clock_seconds": clock},
                 finished=state == "post",
             ))
+        return states
+
+
+class EspnCoreNbaProvider:
+    """Schedule-only ESPN Core fallback for networks where Site API is blocked."""
+
+    base = "https://sports.core.api.espn.com/v2/sports/basketball/leagues/nba/events"
+    headers = {"Referer": "https://www.espn.com/", "Accept-Language": "en-US,en;q=0.9"}
+
+    @staticmethod
+    def _teams(event: dict) -> tuple[str, str] | None:
+        name = str(event.get("name") or "").strip()
+        for separator in (" at ", " vs. ", " vs "):
+            if separator in name:
+                away, home = (value.strip() for value in name.split(separator, 1))
+                if away and home:
+                    return away, home
+        return None
+
+    def schedule(self, day: date) -> list[DiscoveredEvent]:
+        rows: dict[str, DiscoveredEvent] = {}
+        # ESPN Core interprets ``dates`` as the US game date. NBA games on US
+        # date D are played on UTC+8 report date D+1.
+        query_day = day - timedelta(days=1)
+        index = _get_json(
+            self.base, params={"dates": query_day.strftime("%Y%m%d"), "limit": 100},
+            headers=self.headers,
+        )
+        references = [str(item.get("$ref") or "").replace("http://", "https://", 1)
+                      for item in (index.get("items") or []) if item.get("$ref")]
+        if not references:
+            return []
+        with ThreadPoolExecutor(max_workers=min(8, len(references))) as pool:
+            events = list(pool.map(lambda reference: _get_json(
+                reference, headers=self.headers, timeout=10,
+            ), references))
+        for event in events:
+            teams = self._teams(event)
+            if not teams or not event.get("date") or not event.get("id"):
+                continue
+            start = datetime.fromisoformat(str(event["date"]).replace("Z", "+00:00"))
+            rows[str(event["id"])] = DiscoveredEvent(
+                "espn_core", str(event["id"]), "nba", "NBA", teams[0], teams[1], start,
+                "SCHEDULED", event_name="NBA",
+            )
+        return list(rows.values())
+
+
+class HupuNbaProvider:
+    """China-reachable NBA schedule, score and box-score fallback from Hupu HTML."""
+
+    schedule_url = "https://nba.hupu.com/schedule/{day}"
+    boxscore_url = "https://nba.hupu.com/games/boxscore/{game_id}"
+    headers = {"Referer": "https://nba.hupu.com/", "Origin": "https://nba.hupu.com"}
+    zone = ZoneInfo("Asia/Shanghai")
+    team_slugs = {
+        "76ers": NBA["76ers"], "bucks": NBA["Bucks"], "bulls": NBA["Bulls"],
+        "cavaliers": NBA["Cavaliers"], "celtics": NBA["Celtics"], "clippers": NBA["Clippers"],
+        "grizzlies": NBA["Grizzlies"], "hawks": NBA["Hawks"], "heat": NBA["Heat"],
+        "hornets": NBA["Hornets"], "jazz": NBA["Jazz"], "kings": NBA["Kings"],
+        "knicks": NBA["Knicks"], "lakers": NBA["Lakers"], "magic": NBA["Magic"],
+        "mavericks": NBA["Mavericks"], "nets": NBA["Nets"], "nuggets": NBA["Nuggets"],
+        "pacers": NBA["Pacers"], "pelicans": NBA["Pelicans"], "pistons": NBA["Pistons"],
+        "raptors": NBA["Raptors"], "rockets": NBA["Rockets"], "spurs": NBA["Spurs"],
+        "suns": NBA["Suns"], "thunder": NBA["Thunder"], "timberwolves": NBA["Timberwolves"],
+        "blazers": NBA["Trail Blazers"], "warriors": NBA["Warriors"], "wizards": NBA["Wizards"],
+    }
+
+    @classmethod
+    def _team_from_href(cls, href: str) -> str | None:
+        match = re.search(r"/teams/([^/?#\"]+)", href)
+        return cls.team_slugs.get(match.group(1).casefold()) if match else None
+
+    @classmethod
+    def parse_schedule(cls, page: str, day: date) -> list[DiscoveredEvent]:
+        parser = _SelectedTableParser()
+        parser.feed(page)
+        active_day = False
+        rows: list[DiscoveredEvent] = []
+        for cells in parser.tables.get("players_table", []):
+            if not cells:
+                continue
+            date_match = re.search(r"(\d{1,2})月(\d{1,2})日", cells[0]["text"])
+            if date_match:
+                active_day = (int(date_match.group(1)), int(date_match.group(2))) == (day.month, day.day)
+                continue
+            if not active_day or len(cells) < 3 or not re.fullmatch(r"\d{1,2}:\d{2}", cells[0]["text"]):
+                continue
+            team_hrefs = [href for href in cells[1]["hrefs"] if "/teams/" in href]
+            teams = [cls._team_from_href(href) for href in team_hrefs[:2]]
+            game_href = next((href for href in cells[2]["hrefs"] if "/games/boxscore/" in href), "")
+            game_match = re.search(r"/games/boxscore/(\d+)", game_href)
+            if len(teams) != 2 or not all(teams) or not game_match:
+                continue
+            hour, minute = (int(value) for value in cells[0]["text"].split(":"))
+            start = datetime(day.year, day.month, day.day, hour, minute, tzinfo=cls.zone)
+            rows.append(DiscoveredEvent(
+                "hupu", game_match.group(1), "nba", "NBA", str(teams[0]), str(teams[1]), start,
+                "SCHEDULED", event_name="NBA",
+            ))
+        return rows
+
+    def schedule(self, day: date) -> list[DiscoveredEvent]:
+        page = _get_html(self.schedule_url.format(day=day.isoformat()), headers=self.headers)
+        return self.parse_schedule(page, day)
+
+    @staticmethod
+    def _integer(value: object) -> int | None:
+        try:
+            return int(str(value).strip())
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _made_attempted(value: str) -> tuple[int, int]:
+        match = re.fullmatch(r"\s*(\d+)\s*-\s*(\d+)\s*", str(value))
+        return (int(match.group(1)), int(match.group(2))) if match else (0, 0)
+
+    @staticmethod
+    def _minutes(value: str) -> tuple[str | None, float]:
+        text = str(value).strip()
+        if re.fullmatch(r"\d+", text):
+            return f"PT{int(text)}M", float(text) * 60
+        match = re.fullmatch(r"(\d+):(\d{2})", text)
+        if match:
+            seconds = int(match.group(1)) * 60 + int(match.group(2))
+            return f"PT{match.group(1)}M{match.group(2)}S", float(seconds)
+        return None, 0.0
+
+    @classmethod
+    def _table_team(cls, rows: list[list[dict[str, Any]]], slug: str,
+                    score: int | None, periods: list[dict]) -> dict:
+        players: list[dict] = []
+        starter = True
+        statistics: dict[str, Any] = {}
+        for cells in rows:
+            texts = [cell["text"] for cell in cells]
+            if not texts:
+                continue
+            label = texts[0]
+            if label in {"首发", "替补"}:
+                starter = label == "首发"
+                continue
+            if label == "统计" and len(texts) >= 15:
+                fgm, fga = cls._made_attempted(texts[3])
+                tpm, tpa = cls._made_attempted(texts[4])
+                ftm, fta = cls._made_attempted(texts[5])
+                statistics = {
+                    "fieldGoalsMade": fgm, "fieldGoalsAttempted": fga,
+                    "fieldGoalsPercentage": fgm / fga if fga else 0.0,
+                    "threePointersMade": tpm, "threePointersAttempted": tpa,
+                    "threePointersPercentage": tpm / tpa if tpa else 0.0,
+                    "freeThrowsMade": ftm, "freeThrowsAttempted": fta,
+                    "freeThrowsPercentage": ftm / fta if fta else 0.0,
+                    "reboundsOffensive": cls._integer(texts[6]) or 0,
+                    "reboundsDefensive": cls._integer(texts[7]) or 0,
+                    "reboundsTotal": cls._integer(texts[8]) or 0,
+                    "assists": cls._integer(texts[9]) or 0,
+                    "foulsPersonal": cls._integer(texts[10]) or 0,
+                    "steals": cls._integer(texts[11]) or 0,
+                    "turnoversTotal": cls._integer(texts[12]) or 0,
+                    "blocks": cls._integer(texts[13]) or 0,
+                    "points": cls._integer(texts[14]) or score or 0,
+                }
+                continue
+            player_href = next((href for href in cells[0]["hrefs"] if "/players/" in href), "")
+            if not player_href or len(texts) < 16:
+                continue
+            fgm, fga = cls._made_attempted(texts[3])
+            tpm, tpa = cls._made_attempted(texts[4])
+            ftm, fta = cls._made_attempted(texts[5])
+            minutes, minutes_seconds = cls._minutes(texts[2])
+            person_match = re.search(r"-(\d+)\.html", player_href)
+            players.append({
+                "person_id": int(person_match.group(1)) if person_match else None,
+                "name": texts[0], "jersey_num": None, "position": texts[1],
+                "starter": starter, "played": minutes_seconds > 0,
+                "minutes": minutes, "minutes_seconds": minutes_seconds,
+                "points": cls._integer(texts[14]) or 0,
+                "field_goals_made": fgm, "field_goals_attempted": fga,
+                "field_goals_percentage": fgm / fga if fga else 0.0,
+                "three_pointers_made": tpm, "three_pointers_attempted": tpa,
+                "three_pointers_percentage": tpm / tpa if tpa else 0.0,
+                "free_throws_made": ftm, "free_throws_attempted": fta,
+                "free_throws_percentage": ftm / fta if fta else 0.0,
+                "rebounds_offensive": cls._integer(texts[6]) or 0,
+                "rebounds_defensive": cls._integer(texts[7]) or 0,
+                "rebounds_total": cls._integer(texts[8]) or 0,
+                "assists": cls._integer(texts[9]) or 0,
+                "fouls_personal": cls._integer(texts[10]) or 0,
+                "steals": cls._integer(texts[11]) or 0,
+                "turnovers": cls._integer(texts[12]) or 0,
+                "blocks": cls._integer(texts[13]) or 0,
+                "plus_minus_points": cls._integer(texts[15]) or 0,
+                "raw_statistics": {},
+            })
+        regulation_minutes = 240 + max(0, len(periods) - 4) * 25
+        if statistics:
+            statistics["minutes"] = f"PT{regulation_minutes}M"
+        return {
+            "team_id": slug, "team_name": cls.team_slugs.get(slug, slug),
+            "team_city": None, "team_tricode": None, "score": score,
+            "periods": periods, "statistics": statistics, "players": players,
+        }
+
+    @classmethod
+    def parse_boxscore(cls, page: str, game_id: str) -> dict | None:
+        def summary(class_name: str) -> tuple[str | None, int | None]:
+            end_marker = "team_b" if class_name == "team_a" else "about_fonts"
+            match = re.search(
+                rf'<div class="{class_name}(?:\s[^\"]*)?">(.*?)'
+                rf'(?=<div class="{end_marker}(?:\s[^\"]*)?">)', page, re.S,
+            )
+            if not match:
+                return None, None
+            section = match.group(1)
+            href_match = re.search(r'/teams/([^/?#\"]+)', section)
+            score_match = re.search(r"<h2>\s*([^<]*)\s*</h2>", section)
+            slug = href_match.group(1).casefold() if href_match else None
+            score = cls._integer(html.unescape(score_match.group(1))) if score_match else None
+            return slug, score
+
+        away_slug, away_score = summary("team_a")
+        home_slug, home_score = summary("team_b")
+        if away_slug not in cls.team_slugs or home_slug not in cls.team_slugs:
+            return None
+        parser = _SelectedTableParser()
+        parser.feed(page)
+        period_rows = parser.tables.get("itinerary_table", [])
+        away_periods: list[dict] = []
+        home_periods: list[dict] = []
+        if len(period_rows) >= 3:
+            for index, value in enumerate([cell["text"] for cell in period_rows[1][1:-1]], 1):
+                away_periods.append({"period": index, "period_type": "REGULAR" if index <= 4 else "OVERTIME",
+                                     "score": cls._integer(value)})
+            for index, value in enumerate([cell["text"] for cell in period_rows[2][1:-1]], 1):
+                home_periods.append({"period": index, "period_type": "REGULAR" if index <= 4 else "OVERTIME",
+                                     "score": cls._integer(value)})
+        away = cls._table_team(parser.tables.get("J_away_content", []), away_slug, away_score, away_periods)
+        home = cls._table_team(parser.tables.get("J_home_content", []), home_slug, home_score, home_periods)
+        live_match = re.search(r'is_live:\s*parseInt\("(\d+)"\)', page)
+        is_live = bool(live_match and live_match.group(1) == "1")
+        has_totals = bool(away["statistics"] and home["statistics"] and
+                          away_score is not None and home_score is not None)
+        status = "LIVE" if is_live else "FINISHED" if has_totals else "WAITING"
+        time_match = re.search(r"开赛：\s*(\d{4})年(\d{1,2})月(\d{1,2})日\s*(\d{1,2}):(\d{2})", page)
+        game_time = None
+        if time_match:
+            values = [int(value) for value in time_match.groups()]
+            game_time = datetime(*values, tzinfo=cls.zone).astimezone(timezone.utc).isoformat()
+        arena_match = re.search(r'<p class="arena">\s*球馆：\s*([^<]*)</p>', page)
+        attendance_match = re.search(r'<p class="peopleNum">\s*上座：\s*(\d+)人</p>', page)
+        box = {
+            "game_id": str(game_id), "game_status": status,
+            "game_status_text": "Final" if status == "FINISHED" else "In Progress" if status == "LIVE" else "Scheduled",
+            "period": max(len(away_periods), len(home_periods)) or None,
+            "game_clock": None, "game_time_utc": game_time, "duration": None,
+            "duration_seconds": 0.0,
+            "attendance": int(attendance_match.group(1)) if attendance_match else None,
+            "arena": {"arenaName": html.unescape(arena_match.group(1)).strip()} if arena_match else {},
+            "officials": [], "home_team": home, "away_team": away,
+        }
+        if away_score is not None and home_score is not None:
+            home["winner"] = home_score > away_score
+            away["winner"] = away_score > home_score
+        return box
+
+    def boxscore(self, game_id: str) -> dict | None:
+        page = _get_html(self.boxscore_url.format(game_id=game_id), headers=self.headers)
+        return self.parse_boxscore(page, str(game_id))
+
+    def live(self, day: date | None = None) -> list[LiveState]:
+        day = day or datetime.now(self.zone).date()
+        now = datetime.now(timezone.utc)
+        states: list[LiveState] = []
+        events = self.schedule(day)
+        unavailable = 0
+        for event in events:
+            try:
+                box = self.boxscore(event.source_id)
+            except DataSourceUnavailable:
+                box = None
+            if box is None:
+                unavailable += 1
+            away = (box or {}).get("away_team", {})
+            home = (box or {}).get("home_team", {})
+            status = str((box or {}).get("game_status") or "WAITING")
+            states.append(LiveState(
+                "hupu", event.source_id, "nba", now, status,
+                str(away.get("team_name") or event.team_a), str(home.get("team_name") or event.team_b),
+                float(away["score"]) if away.get("score") is not None else None,
+                float(home["score"]) if home.get("score") is not None else None,
+                period=str((box or {}).get("period") or ""), clock_seconds=None,
+                features={"hupu_game_id": event.source_id, "period": (box or {}).get("period") or 0},
+                finished=status == "FINISHED", raw_available=box is not None,
+            ))
+        if events and unavailable == len(events):
+            raise DataSourceUnavailable("Hupu returned a schedule but no readable NBA boxscore pages")
         return states
 
 
