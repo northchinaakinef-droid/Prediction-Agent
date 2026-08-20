@@ -14,7 +14,8 @@ from .lol_model import EloModel, load_model, series_probability
 from .nba_model import NbaModel, load_nba
 from .providers.polymarket import PolymarketClient
 from .providers.live_data import (
-    Bo3Cs2Provider, EsportAgendaCs2Provider, EspnNbaProvider, GridOpenAccessProvider, NbaOfficialProvider,
+    Bo3Cs2Provider, EsportAgendaCs2Provider, EspnCoreNbaProvider, EspnNbaProvider,
+    GridOpenAccessProvider, HupuNbaProvider, NbaOfficialProvider,
     PandaScoreProvider, SportSrcNbaProvider, TheSportsDbNbaProvider,
 )
 from .risk import RiskBudgetLedger, RiskConfig, kelly_fraction, paper_recommend, recommend
@@ -620,6 +621,8 @@ def run_all(model_dir: str | Path, output: str | Path, *, now: datetime | None =
             return SourceResult(name, False, [], repr(error))
     nba_sources = [
         external_source("nba_official", "nba", lambda: NbaOfficialProvider().schedule(report_day)),
+        external_source("hupu", "nba", lambda: HupuNbaProvider().schedule(report_day)),
+        external_source("espn_core", "nba", lambda: EspnCoreNbaProvider().schedule(report_day)),
         external_source("espn", "nba", lambda: EspnNbaProvider().schedule(report_day)),
         external_source("thesportsdb", "nba", lambda: TheSportsDbNbaProvider().schedule(report_day)),
         external_source("sportsrc", "nba", lambda: SportSrcNbaProvider().schedule(report_day)),
