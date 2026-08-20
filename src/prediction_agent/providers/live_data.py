@@ -25,7 +25,7 @@ def _get_json(url: str, *, params: dict[str, object] | None = None,
     if params:
         url = f"{url}?{urlencode(params)}"
     request_headers = {
-        "Accept": "application/json", "User-Agent": "Mozilla/5.0 PredictionAgent/0.2",
+        "Accept": "application/json", "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
         "Referer": "https://www.nba.com/", "Origin": "https://www.nba.com",
     }
     request_headers.update(headers or {})
@@ -454,7 +454,7 @@ class LeaguepediaDraftProvider:
                 "SG.Patch,SG.N_GameInMatch,SG.Team1Players,SG.Team2Players,SG.Team1Bans,SG.Team2Bans"
             ),
             "where": f"SG.DateTime_UTC >= '{since}'", "order_by": "SG.DateTime_UTC DESC",
-        }, headers={"User-Agent": "PredictionAgent/0.2"})
+        }, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"})
         targets = tuple(value.strip().casefold() for value in os.getenv(
             "LOL_TARGET_LEAGUES", "LPL,LCK,LEC,LCS,LTA,LCP,MSI,Worlds,First Stand,EWC,Esports World Cup"
         ).split(",") if value.strip())
@@ -507,7 +507,7 @@ class LeaguepediaDraftProvider:
                 "SP.Pentakills,SP.TeamKills,SP.TeamGold,SP.DateTime_UTC"
             ),
             "where": f"SP.DateTime_UTC >= '{since}'", "order_by": "SP.DateTime_UTC DESC",
-        }, headers={"User-Agent": "PredictionAgent/0.2"})
+        }, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"})
         grouped: dict[str, list[dict]] = {}
         for result in payload.get("cargoquery", []):
             row = result.get("title", {})
@@ -553,7 +553,7 @@ class LeaguepediaDraftProvider:
                 "ST.RiftHeralds,ST.VoidGrubs,ST.Atakhans,ST.Inhibitors"
             ),
             "where": f"ST.GameId IS NOT NULL", "limit": 500,
-        }, headers={"User-Agent": "PredictionAgent/0.2"})
+        }, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"})
         grouped: dict[str, list[dict]] = {}
         for result in payload.get("cargoquery", []):
             row = result.get("title", {})
@@ -736,7 +736,7 @@ class EsportAgendaCs2Provider:
     url = "https://www.esportagenda.com/cs2"
 
     def schedule(self, day: date, target_tournaments: set[str]) -> list[DiscoveredEvent]:
-        request = Request(self.url, headers={"Accept": "text/html", "User-Agent": "PredictionAgent/0.2"})
+        request = Request(self.url, headers={"Accept": "text/html", "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"})
         try:
             with urlopen(request, timeout=30) as response:
                 text = html.unescape(response.read().decode("utf-8")).replace(r'\"', '"')
