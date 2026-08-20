@@ -1,4 +1,5 @@
 import json
+import sqlite3
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -9,6 +10,7 @@ from prediction_agent.delivery import format_daily_report, format_live_alert
 from prediction_agent.live_runtime import LiveSupervisor
 from prediction_agent.paper_store import (
     calc_roi,
+    count_settled_virtual_bets,
     count_virtual_bets,
     record_virtual_bet,
     virtual_account_balance,
@@ -34,7 +36,7 @@ class BettingGateTests(unittest.TestCase):
         match["expected_value"] = 0.03
         self.assertFalse(should_place_virtual_bet(match)[0])
 
-    def test_real_bet_remains_locked_without_real_money_approval(self):
+    def test_real_advice_shows_virtual_progress_before_100_settled_bets(self):
         with tempfile.TemporaryDirectory() as temp:
             db = Path(temp) / "paper.db"
             match = {
@@ -47,7 +49,41 @@ class BettingGateTests(unittest.TestCase):
             }
             ok, reason = can_place_real_bet(match, db)
             self.assertFalse(ok)
-            self.assertIn("真实资金锁箱", reason)
+            self.assertIn("虚拟第0场/100场", reason)
+            self.assertIn("距真实建议还差100场", reason)
+
+    def test_real_advice_upgrades_at_100_settled_bets_with_nonnegative_roi(self):
+        with tempfile.TemporaryDirectory() as temp:
+            db = Path(temp) / "paper.db"
+            for index in range(100):
+                record_virtual_bet(db, {
+                    "sport": "lol", "event_id": f"e{index}", "event": f"A vs B {index}",
+                    "generated_at": f"2026-08-19T00:{index // 60:02d}:{index % 60:02d}+00:00",
+                    "bet_side": "A", "model_prob": .6, "market_odds": 1.8,
+                    "stake_virtual": 10.0, "result": "A", "pnl_virtual": 0.0,
+                })
+            match = {
+                "real_money_approved": False, "lineup_status": "完整",
+                "market_mapping_status": "MATCHED", "expected_value": .08,
+                "direction_match": True, "market_started": False,
+            }
+            ok, reason = can_place_real_bet(match, db)
+        self.assertTrue(ok, reason)
+        self.assertIn("升级为真实建议", reason)
+
+    def test_real_advice_stays_virtual_when_100_bet_roi_is_negative(self):
+        with tempfile.TemporaryDirectory() as temp:
+            db = Path(temp) / "paper.db"
+            for index in range(100):
+                record_virtual_bet(db, {
+                    "sport": "nba", "event_id": f"e{index}", "event": f"A vs B {index}",
+                    "generated_at": f"2026-08-19T01:{index // 60:02d}:{index % 60:02d}+00:00",
+                    "bet_side": "A", "model_prob": .6, "market_odds": 1.8,
+                    "stake_virtual": 10.0, "result": "B", "pnl_virtual": -10.0,
+                })
+            ok, reason = can_place_real_bet({}, db)
+        self.assertFalse(ok)
+        self.assertIn("虚拟ROI=-100.0%", reason)
 
 
 class PaperStoreVirtualTests(unittest.TestCase):
@@ -69,6 +105,26 @@ class PaperStoreVirtualTests(unittest.TestCase):
             self.assertEqual(count_virtual_bets(db), 1)
             self.assertAlmostEqual(calc_roi(db, bet_type="virtual"), 0.1)
             self.assertAlmostEqual(virtual_account_balance(db, 1000.0), 1010.0)
+
+    def test_settlement_table_counts_and_prices_completed_virtual_bet(self):
+        with tempfile.TemporaryDirectory() as temp:
+            db = Path(temp) / "paper.db"
+            record_virtual_bet(db, {
+                "sport": "lol", "event_id": "e1", "event": "A vs B",
+                "generated_at": "2026-08-19T00:00:00+00:00", "bet_side": "A",
+                "model_prob": .6, "market_odds": 2.0, "stake_virtual": 10.0,
+            })
+            connection = sqlite3.connect(db)
+            try:
+                connection.execute(
+                    "INSERT INTO settlements VALUES (?, ?, ?, ?, ?, ?)",
+                    ("lol", "e1", "A", "2026-08-19T02:00:00+00:00", "test", "{}"),
+                )
+                connection.commit()
+            finally:
+                connection.close()
+            self.assertEqual(count_settled_virtual_bets(db), 1)
+            self.assertGreater(calc_roi(db, bet_type="virtual"), 0)
 
 
 class DeliveryReformTests(unittest.TestCase):
@@ -132,12 +188,14 @@ class DeliveryReformTests(unittest.TestCase):
                 "bet_status": "虚拟下注",
             }],
             "paper_daily": {},
+            "today_scheduled_matches": 3,
             "risk_status": {"current_drawdown": 0.0, "drawdown_level": "normal"},
             "virtual_betting": {"count": 12, "roi": 0.03, "balance": 10030.0},
         }
         text = format_daily_report(report)
         self.assertIn("【虚拟下注】", text)
-        self.assertIn("【虚拟积累】12/100场", text)
+        self.assertIn("虚拟第12场/100场，距真实建议还差88场", text)
+        self.assertIn("【今日赛程】实际场次 3 场", text)
 
 
 class LiveRuntimeReformTests(unittest.TestCase):

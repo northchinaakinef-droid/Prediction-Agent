@@ -254,6 +254,22 @@ def count_virtual_bets(path: str | Path) -> int:
     return int(row[0] or 0)
 
 
+def count_settled_virtual_bets(path: str | Path) -> int:
+    """Return the number of virtual bets with a recorded result and PnL."""
+    target = Path(path)
+    if not target.exists():
+        return 0
+    with closing(sqlite3.connect(target)) as connection:
+        connection.executescript(SCHEMA)
+        row = connection.execute(
+            """SELECT COUNT(*) FROM virtual_bets v
+               LEFT JOIN settlements s ON s.sport=v.sport AND s.event_id=v.event_id
+               WHERE (v.result IS NOT NULL AND v.pnl_virtual IS NOT NULL)
+                  OR s.winner IS NOT NULL"""
+        ).fetchone()
+    return int(row[0] or 0)
+
+
 def calc_roi(path: str | Path, bet_type: str = "virtual", last_n: int | None = None) -> float | None:
     """Return ROI for settled virtual or real bets, optionally over the last N."""
     target = Path(path)
@@ -263,9 +279,13 @@ def calc_roi(path: str | Path, bet_type: str = "virtual", last_n: int | None = N
         connection.executescript(SCHEMA)
         if bet_type == "virtual":
             rows = connection.execute(
-                """SELECT stake_virtual, pnl_virtual FROM virtual_bets
-                   WHERE result IS NOT NULL AND pnl_virtual IS NOT NULL
-                   ORDER BY generated_at DESC"""
+                """SELECT v.stake_virtual, v.pnl_virtual, v.bet_side,
+                          v.market_odds, COALESCE(v.result, s.winner)
+                   FROM virtual_bets v
+                   LEFT JOIN settlements s ON s.sport=v.sport AND s.event_id=v.event_id
+                   WHERE (v.result IS NOT NULL AND v.pnl_virtual IS NOT NULL)
+                      OR s.winner IS NOT NULL
+                   ORDER BY v.generated_at DESC"""
             ).fetchall()
         elif bet_type == "real":
             rows = connection.execute(
@@ -277,7 +297,16 @@ def calc_roi(path: str | Path, bet_type: str = "virtual", last_n: int | None = N
             raise ValueError(f"unsupported bet_type: {bet_type}")
     if last_n is not None:
         rows = rows[:last_n]
-    profit = sum(float(row[1] or 0) for row in rows)
+    if bet_type == "virtual":
+        profit = sum(
+            float(row[1]) if row[1] is not None else _paper_bet_profit(
+                row[0], 1 / float(row[3]) if float(row[3] or 0) > 0 else None,
+                str(row[2] or "").strip() == str(row[4] or "").strip(),
+            )
+            for row in rows
+        )
+    else:
+        profit = sum(float(row[1] or 0) for row in rows)
     turnover = sum(float(row[0] or 0) for row in rows)
     return profit / turnover if turnover > 0 else None
 
@@ -289,10 +318,22 @@ def virtual_account_balance(path: str | Path, bankroll: float) -> float:
         return float(bankroll)
     with closing(sqlite3.connect(target)) as connection:
         connection.executescript(SCHEMA)
-        row = connection.execute(
-            "SELECT COALESCE(SUM(pnl_virtual), 0) FROM virtual_bets WHERE pnl_virtual IS NOT NULL"
-        ).fetchone()
-    return float(bankroll) + float(row[0] or 0)
+        rows = connection.execute(
+            """SELECT v.stake_virtual, v.pnl_virtual, v.bet_side,
+                      v.market_odds, COALESCE(v.result, s.winner)
+               FROM virtual_bets v
+               LEFT JOIN settlements s ON s.sport=v.sport AND s.event_id=v.event_id
+               WHERE (v.result IS NOT NULL AND v.pnl_virtual IS NOT NULL)
+                  OR s.winner IS NOT NULL"""
+        ).fetchall()
+    profit = sum(
+        float(row[1]) if row[1] is not None else _paper_bet_profit(
+            row[0], 1 / float(row[3]) if float(row[3] or 0) > 0 else None,
+            str(row[2] or "").strip() == str(row[4] or "").strip(),
+        )
+        for row in rows
+    )
+    return float(bankroll) + profit
 
 
 def record_post_match_review(path: str | Path, review: dict[str, Any]) -> None:

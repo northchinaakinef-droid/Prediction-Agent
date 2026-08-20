@@ -21,7 +21,10 @@ from .risk import RiskBudgetLedger, RiskConfig, kelly_fraction, paper_recommend,
 from .entities import canonical_team, normalized_name
 from .betting_gate import bet_status, can_place_real_bet, should_place_virtual_bet
 from .context import player_display_names, recent_form_for
-from .paper_store import calc_roi, count_virtual_bets, current_drawdown, record_virtual_bet, virtual_account_balance
+from .paper_store import (
+    calc_roi, count_settled_virtual_bets, count_virtual_bets, current_drawdown,
+    record_virtual_bet, virtual_account_balance,
+)
 from .costs import estimate_cost_rate
 from .narrative import build_pre_match_summary
 from .schedule import (
@@ -161,6 +164,23 @@ def _main_market(event: dict) -> dict | None:
     candidates = [m for m in markets if m.get("gameStartTime")]
     return next((m for m in candidates if m.get("sportsMarketType") == "moneyline"), None) or next(
         (m for m in candidates if m.get("question") == event.get("title")), None)
+
+
+def _scheduled_market_events(sport: str, events: list[dict],
+                             schedule_matches: list[dict]) -> list[dict]:
+    """Keep only market events present in today's discovered schedule."""
+    scheduled_events = []
+    for event in events:
+        market = _main_market(event)
+        if not market:
+            continue
+        scheduled = _start(market)
+        outcomes = [_text(value) for value in _field(market.get("outcomes"))]
+        if len(outcomes) != 2 or scheduled is None:
+            continue
+        if _find_schedule_match(schedule_matches, sport, outcomes[0], outcomes[1], scheduled):
+            scheduled_events.append(event)
+    return scheduled_events
 def analyze_sport(sport: str, model: EloModel | NbaModel, evaluation: dict, events: list[dict], *,
                   now: datetime, bankroll: float, estimated_cost: float | None = None,
                   schedule_matches: list[dict] | None = None,
@@ -238,8 +258,6 @@ def analyze_sport(sport: str, model: EloModel | NbaModel, evaluation: dict, even
         reasons.append("市场价格只用于估值和下注判断，不进入独立胜率模型")
         if not probability_ok:
             reasons.append("概率模型未通过锁箱验收或队伍历史样本不足")
-        if not money_ok:
-            reasons.append("未通过历史可成交赔率 ROI 验收，禁止真钱建议")
         if started:
             reasons.append("比赛已开始或开赛时间无法核验，禁止赛前下注")
         market_probability = prices[side]
@@ -309,6 +327,8 @@ def _attach_bet_fields(row: dict, *, model_probability: float | None,
                             if virtual_ok else 0.0)
     row["bet_status"] = bet_status(row, paper_db)
     row["real_bet_reason"] = can_place_real_bet(row, paper_db)[1] if virtual_ok else ""
+    if virtual_ok and row["real_bet_reason"]:
+        row.setdefault("reasons", []).append(row["real_bet_reason"])
     return row
 def _patch_meta_context(model, sport: str, roster_a, roster_b) -> tuple[list[str], float | None, float | None]:
     """Derive top patch heroes and each roster's coverage from the frozen model."""
@@ -400,8 +420,6 @@ def _research_row(sport: str, event: dict, market: dict, scheduled: datetime | N
         ledger.commit(event_key, group, rec.stake_fraction)
     if not probability_ok:
         reasons.append("阵容未知、阵容过期、样本不足或概率模型未通过验收，因此只展示研究值。")
-    if not money_ok:
-        reasons.append("尚未通过带历史可成交赔率的样本外 ROI 验收，禁止真钱下注建议。")
     if started:
         reasons.append("比赛已开始或开赛时间无法核验，禁止赛前下注。")
     market_probability = prices[side]
@@ -650,7 +668,7 @@ def run_all(model_dir: str | Path, output: str | Path, *, now: datetime | None =
             model, evaluation = load_nba(path)
         else:
             model, evaluation = load_model(path)
-        events = market_events[sport]
+        events = _scheduled_market_events(sport, market_events[sport], audit_matches[sport])
         if sport == "cs2":
             sport_rows = analyze_cs2(model, evaluation, events, now=now, bankroll=bankroll,
                                      schedule_matches=audit_matches[sport], risk_config=risk_config,
@@ -672,6 +690,7 @@ def run_all(model_dir: str | Path, output: str | Path, *, now: datetime | None =
             "trained_through": model.trained_through, "samples": model.samples,
             "probability_approved": bool(evaluation.get("approved_for_probability_use")),
             "real_money_approved": bool(evaluation.get("approved_for_real_money")),
+            "today_scheduled_matches": len(audit_matches[sport]),
             "today_markets": len(sport_rows),
             "today_prestart_markets": sum(not row["market_started"] for row in sport_rows),
             "today_probability_eligible": sum(row["probability_eligible"] for row in sport_rows),
@@ -713,7 +732,8 @@ def run_all(model_dir: str | Path, output: str | Path, *, now: datetime | None =
                 "stake_virtual": row.get("stake_virtual") or 0.0,
             })
     virtual_betting = {
-        "count": count_virtual_bets(paper_db),
+        "count": count_settled_virtual_bets(paper_db),
+        "recorded_count": count_virtual_bets(paper_db),
         "roi": calc_roi(paper_db, bet_type="virtual"),
         "balance": virtual_account_balance(paper_db, bankroll),
     }
@@ -724,7 +744,7 @@ def run_all(model_dir: str | Path, output: str | Path, *, now: datetime | None =
     risk_notes = [
         "NBA、LoL、CS2 分别训练和验收；CBA 已暂停。",
         f"虚拟投注：{paper_mode}；仅写入 paper.db，不涉及真实资金。",
-        "真实资金下注仍保持关闭。",
+        "系统仅输出研究建议，不执行任何真实资金交易。",
     ]
     if ledger.breaker_reason:
         risk_notes.append(ledger.breaker_reason)
@@ -734,6 +754,7 @@ def run_all(model_dir: str | Path, output: str | Path, *, now: datetime | None =
         "report_date": report_day.isoformat(), "generated_at": now.isoformat(),
         "bankroll_usdc": bankroll, "recommendations": recommendations, "sport_status": statuses,
         "schedule_coverage": audits,
+        "today_scheduled_matches": sum(len(rows) for rows in audit_matches.values()),
         "data_incomplete": any(audit["data_incomplete"] for audit in audits.values()),
         "flagged": flagged,
         "flag_threshold": flag_threshold,

@@ -162,6 +162,10 @@ class LiveRuntimeTests(unittest.TestCase):
         now = datetime.now(timezone.utc)
         with tempfile.TemporaryDirectory() as temp:
             supervisor = LiveSupervisor(root=Path(temp))
+            supervisor._report = lambda: {"recommendations": [{
+                "sport": "lol", "event": "T1 vs Gen.G", "outcome": "Gen.G",
+                "model_probability": .55,
+            }]}
             first = LiveState(
                 "leaguepedia", "g1", "lol", now, "FINISHED", "T1", "Gen.G",
                 features={"winner_side": "b", "post_draft_probability": .55},
@@ -178,6 +182,34 @@ class LiveRuntimeTests(unittest.TestCase):
             )[0]
         self.assertEqual(first_alert.dedupe_key, second_alert.dedupe_key)
         self.assertTrue(first_alert.dedupe_key.endswith(":POSTMATCH_REVIEW"))
+
+    def test_postmatch_review_is_silent_without_prematch_probability_or_bet(self):
+        now = datetime.now(timezone.utc)
+        with tempfile.TemporaryDirectory() as temp:
+            supervisor = LiveSupervisor(root=Path(temp))
+            supervisor._report = lambda: {"recommendations": []}
+            state = LiveState(
+                "leaguepedia", "g1", "lol", now, "FINISHED", "T1", "Gen.G",
+                features={"winner_side": "b", "post_draft_probability": .55}, finished=True,
+            )
+            alerts = supervisor._result_review_alerts([state], now)
+        self.assertEqual(alerts, [])
+
+    def test_postmatch_review_is_sent_when_bet_exists_without_prematch_probability(self):
+        now = datetime.now(timezone.utc)
+        with tempfile.TemporaryDirectory() as temp:
+            supervisor = LiveSupervisor(root=Path(temp))
+            supervisor._report = lambda: {"recommendations": [{
+                "sport": "lol", "event": "T1 vs Gen.G", "outcome": "Gen.G",
+                "model_probability": None, "action": "BET",
+            }]}
+            state = LiveState(
+                "leaguepedia", "g1", "lol", now, "FINISHED", "T1", "Gen.G",
+                features={"winner_side": "b"}, finished=True,
+            )
+            alerts = supervisor._result_review_alerts([state], now)
+        self.assertEqual(len(alerts), 1)
+        self.assertEqual(alerts[0].category, "POSTMATCH_REVIEW")
 
     def test_lol_bp_samples_are_recorded_per_small_game(self):
         now = datetime.now(timezone.utc)

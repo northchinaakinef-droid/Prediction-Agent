@@ -247,6 +247,8 @@ def format_daily_report(report: dict[str, Any], report_date: date | None = None)
         return "正常"
 
     lines = [f"【今日模拟下注】{len(bets)}场"]
+    if report.get("today_scheduled_matches") is not None:
+        lines.append(f"【今日赛程】实际场次 {int(report['today_scheduled_matches'])} 场")
     separator = "━━━━━━━━━━━━━━━━"
     if bets:
         lines.append(separator)
@@ -313,7 +315,17 @@ def format_daily_report(report: dict[str, Any], report_date: date | None = None)
         v_balance = virtual_betting.get("balance")
         v_roi_text = "暂无" if v_roi is None else f"{float(v_roi):.1%}"
         v_balance_text = "暂无" if v_balance is None else f"{float(v_balance):.2f} USDC"
-        lines.append(f"【虚拟积累】{v_count}/100场 | 虚拟ROI: {v_roi_text} | 虚拟余额: {v_balance_text}")
+        if v_count < 100:
+            lines.append(
+                f"【虚拟进度】虚拟第{v_count}场/100场，距真实建议还差{100-v_count}场 | "
+                f"虚拟ROI: {v_roi_text} | 虚拟余额: {v_balance_text}"
+            )
+        else:
+            advice_status = "真实建议" if v_roi is not None and float(v_roi) >= 0 else "虚拟下注"
+            lines.append(
+                f"【虚拟进度】已完成{v_count}场 | 虚拟ROI: {v_roi_text} | "
+                f"当前状态: {advice_status} | 虚拟余额: {v_balance_text}"
+            )
     lines.append(f"【风控状态】{risk_status_text()}")
     return "\n".join(lines).strip()
 
@@ -763,6 +775,8 @@ def _format_prematch_alert(row: dict[str, Any]) -> str:
                      f"{team_b} {sample_b if sample_b is not None else '暂无'} 局")
     bet_status = details.get("bet_status") or "跳过"
     lines.extend(["", f"【下注状态】{bet_status}（虚拟下注 / 真实建议 / 跳过）"])
+    if details.get("real_bet_reason"):
+        lines.append(str(details["real_bet_reason"]))
     analyst_count = int(details.get("analyst_count") or 0)
     if analyst_count:
         lines.append(f"分析师参考：已纳入 {analyst_count} 篇相关公开资料。")
