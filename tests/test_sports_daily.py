@@ -3,7 +3,10 @@ import os
 import unittest
 from unittest.mock import patch
 
-from prediction_agent.sports_daily import _find_schedule_match, _is_major_cs2_event, _is_major_lol_event, _probability_sanity, _research_row
+from prediction_agent.sports_daily import (
+    _find_schedule_match, _is_major_cs2_event, _is_major_lol_event,
+    _probability_sanity, _research_row, _scheduled_market_events,
+)
 
 
 class SportsDailyTests(unittest.TestCase):
@@ -54,6 +57,22 @@ class SportsDailyTests(unittest.TestCase):
         self.assertIsNotNone(_find_schedule_match(schedule, "cs2", "A", "B", now))
         self.assertIsNone(_find_schedule_match(schedule, "cs2", "A", "C", now))
         self.assertIsNone(_find_schedule_match(schedule, "nba", "A", "B", now))
+
+    def test_market_events_are_filtered_to_actual_schedule_before_analysis(self):
+        start = "2026-01-01T12:30:00+00:00"
+        def event(event_id, team_a, team_b):
+            return {"id": event_id, "title": f"{team_a} vs {team_b}", "markets": [{
+                "id": f"m-{event_id}", "sportsMarketType": "moneyline",
+                "gameStartTime": start, "outcomes": [team_a, team_b],
+            }]}
+        schedule = [{
+            "sport": "nba", "team_a": "Lakers", "team_b": "Celtics",
+            "start_time": start, "market_mapping_status": "MATCHED",
+        }]
+        filtered = _scheduled_market_events(
+            "nba", [event("in", "Lakers", "Celtics"), event("out", "Knicks", "Nets")], schedule,
+        )
+        self.assertEqual([row["id"] for row in filtered], ["in"])
 
     def test_research_row_marks_market_only_and_suspicious_probability(self):
         now = datetime(2026, 1, 1, 12, tzinfo=timezone.utc)

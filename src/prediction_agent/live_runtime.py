@@ -172,6 +172,7 @@ class LiveSupervisor:
                 "sample_a": row.get("sample_a"),
                 "sample_b": row.get("sample_b"),
                 "bet_status": row.get("bet_status"),
+                "real_bet_reason": row.get("real_bet_reason"),
                 "analyst_count": len(notes),
                 "analyst_notes": [{"title": note.title, "link": note.link, "source": note.source}
                                   for note in notes[:3]],
@@ -282,13 +283,17 @@ class LiveSupervisor:
                 return "b"
         return None
 
-    def _pre_match_status(self, report: dict, state) -> str:
+    @staticmethod
+    def _recommendation_for_state(report: dict, state) -> dict | None:
         recommendations = [row for row in report.get("recommendations", []) if row.get("sport") == state.sport]
         wanted = {normalized_name(canonical_team(state.sport, state.team_a)),
                   normalized_name(canonical_team(state.sport, state.team_b))}
-        row = next((candidate for candidate in recommendations if all(
+        return next((candidate for candidate in recommendations if all(
             name and name in normalized_name(str(candidate.get("event") or "")) for name in wanted
         )), None)
+
+    def _pre_match_status(self, report: dict, state) -> str:
+        row = self._recommendation_for_state(report, state)
         if not row:
             return "赛前未推送（静默跳过）"
         if (row.get("market_mapping_status") == "MATCHED"
@@ -303,12 +308,7 @@ class LiveSupervisor:
         report = self._report()
         if not report:
             return None
-        recommendations = [row for row in report.get("recommendations", []) if row.get("sport") == state.sport]
-        wanted = {normalized_name(canonical_team(state.sport, state.team_a)),
-                  normalized_name(canonical_team(state.sport, state.team_b))}
-        row = next((candidate for candidate in recommendations if all(
-            name and name in normalized_name(str(candidate.get("event") or "")) for name in wanted
-        )), None)
+        row = self._recommendation_for_state(report, state)
         if not row or row.get("model_probability") is None:
             return None
         outcome_norm = normalized_name(canonical_team(state.sport, str(row.get("outcome") or "")))
@@ -640,10 +640,19 @@ class LiveSupervisor:
             actual_side = self._winner_side(state)
             if actual_side is None:
                 continue
+            recommendation = self._recommendation_for_state(report, state)
+            has_prematch_probability = bool(
+                recommendation and recommendation.get("model_probability") is not None
+            )
+            has_bet = bool(recommendation and (
+                recommendation.get("action") == "BET"
+                or recommendation.get("virtual_bet")
+                or float(recommendation.get("stake_virtual") or 0) > 0
+            ))
+            if not has_prematch_probability and not has_bet:
+                continue
             prematch_side = self._prematch_side(state)
             bp_probability = state.features.get("post_draft_probability") if state.sport == "lol" else None
-            if prematch_side is None and bp_probability is None:
-                continue
             actual_team = state.team_a if actual_side == "a" else state.team_b
             bp_side = None
             if bp_probability is not None:

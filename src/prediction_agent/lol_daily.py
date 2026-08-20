@@ -104,7 +104,7 @@ def build_lol_report(model: EloModel, evaluation: dict, events: list[dict], *,
         if started:
             reasons.append("比赛已开始或无法核验开赛时间，禁止赛前下注")
         if not money_approved:
-            reasons.append("尚未通过带历史可成交赔率的锁箱 ROI 验收，保持 NO BET")
+            reasons.append("下注展示状态由统一 daily 流程按虚拟场次与虚拟 ROI 规则计算")
         row = asdict(rec)
         row["generated_at"] = rec.generated_at.isoformat()
         row.update({
@@ -132,7 +132,7 @@ def build_lol_report(model: EloModel, evaluation: dict, events: list[dict], *,
             "daily_committed_fraction": ledger.daily_committed,
         },
         "risk_notes": [
-            "没有通过可成交赔率锁箱 ROI 验收前，系统不会给出真实下注金额",
+            "真实建议展示状态由统一 daily 流程按虚拟场次与虚拟 ROI 规则计算",
             "临场阵容、首发或突发换人缺失时应降低置信度或 NO BET",
         ],
     }
