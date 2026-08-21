@@ -7,11 +7,16 @@ from prediction_agent.delivery import (
     FeishuWebhookClient, _display_team, _event_name, _format_draft_alert, _format_postmatch_alert,
     _format_prematch_alert, format_daily_post, format_daily_report, format_live_alert, webhook_signature,
 )
+from prediction_agent.context import player_display_names
 from prediction_agent.models import MarketSnapshot
 from prediction_agent.risk import normalize_two_way, recommend
 
 
 class CoreTests(unittest.TestCase):
+    def test_unresolved_lol_player_ids_are_not_exposed(self):
+        names = player_display_names("lol", ["oe:player:definitely-unmapped"])
+        self.assertEqual(names, [])
+
     def test_remove_vig(self):
         a, b = normalize_two_way(0.55, 0.55)
         self.assertAlmostEqual(a, 0.5)
@@ -259,7 +264,8 @@ class CoreTests(unittest.TestCase):
             "details": {"actual_winner": "B", "actual_side": "b", "game_samples": []},
             "reasons": [],
         })
-        self.assertIn("未取得逐局 BP、资源和选手数据", text)
+        self.assertIn("数据质量：不足", text)
+        self.assertIn("不生成猜测性归因", text)
         self.assertNotIn("比赛走势偏离预测", text)
 
     def test_draft_alert_includes_strength_and_risk_sections(self):

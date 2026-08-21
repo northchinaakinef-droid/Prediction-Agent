@@ -119,10 +119,11 @@ def _recent_from_cs2_csvs() -> dict[str, dict[str, int]]:
 
 
 def _lol_csv_paths() -> list[Path]:
-    candidates = [
-        ROOT / "data" / "external" / "lol_analysis_2025" / "2025_LoL_esports_match_data_from_OraclesElixir.csv",
-    ]
-    return [path for path in candidates if path.exists()]
+    # Do not pin name resolution to one season.  The frozen model may contain
+    # rosters from a newer Oracle's Elixir export, so every available export
+    # must contribute to the ID -> display-name sidecar.
+    candidates = ROOT.glob("data/external/**/*OraclesElixir*.csv")
+    return sorted({path.resolve() for path in candidates if path.is_file()})
 
 
 def main() -> None:

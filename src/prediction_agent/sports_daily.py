@@ -537,6 +537,17 @@ def analyze_lol_meta(model: LolMetaModel, evaluation: dict, events: list[dict], 
             "BP 未开始时不使用英雄选择；BP 完成后必须重新计算版本英雄强度与选手英雄熟练度。",
         ]
         heroes, coverage_a, coverage_b = _patch_meta_context(model, "lol", roster_a, roster_b)
+        recent_a = recent_form_for("lol", a)
+        recent_b = recent_form_for("lol", b)
+        if recent_a and recent_b:
+            reasons.append(
+                f"近期状态：{a} 最近{recent_a['last_n']}场 {recent_a['wins']}胜{recent_a['losses']}负；"
+                f"{b} 最近{recent_b['last_n']}场 {recent_b['wins']}胜{recent_b['losses']}负。"
+            )
+        if heroes:
+            reasons.append(
+                f"版本池覆盖：{a} {coverage_a:.0f}%，{b} {coverage_b:.0f}%（基于冻结训练样本，不含未开始的 BP）。"
+            )
         row = _research_row("lol", event, market, scheduled, outcomes, prices,
                             [probability, 1-probability], probability_ok=probability_ok,
                             money_ok=bool(evaluation.get("approved_for_real_money")),
@@ -546,8 +557,8 @@ def analyze_lol_meta(model: LolMetaModel, evaluation: dict, events: list[dict], 
         row.update({
             "lineup_a": player_display_names("lol", roster_a),
             "lineup_b": player_display_names("lol", roster_b),
-            "recent_form_a": recent_form_for("lol", a),
-            "recent_form_b": recent_form_for("lol", b),
+            "recent_form_a": recent_a,
+            "recent_form_b": recent_b,
             "best_of": best_of,
             "format": f"BO{best_of}",
             "patch_meta_heroes": heroes,

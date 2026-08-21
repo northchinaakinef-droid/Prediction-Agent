@@ -38,7 +38,22 @@ def player_display_names(sport: str, roster: tuple[str, ...] | list[str]) -> lis
         return []
     if sport == "lol":
         names = load_player_names()
-        return [names.get(str(player), str(player)) for player in roster]
+        displayed = []
+        for index, player in enumerate(roster, 1):
+            raw = str(player).strip()
+            resolved = str(names.get(raw) or "").strip()
+            # Oracle's Elixir IDs are internal join keys, not player names.
+            # Never leak an unresolved opaque ID into a user-facing push.
+            if resolved and not resolved.casefold().startswith("oe:player:"):
+                displayed.append(resolved)
+            elif raw and not raw.casefold().startswith("oe:player:"):
+                displayed.append(raw)
+            else:
+                # An opaque ID is never a valid display name.  Returning an
+                # incomplete lineup makes the existing lineup gate suppress
+                # the analysis until the sidecar is rebuilt from all seasons.
+                return []
+        return displayed
     return [str(player) for player in roster]
 
 

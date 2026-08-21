@@ -263,6 +263,8 @@ class LiveRuntimeTests(unittest.TestCase):
         self.assertIn("第2局 BP", text)
         self.assertIn("第3局 BP", text)
         self.assertIn("BP 后模型胜率", text)
+        self.assertIn("学习标签：系列共 3 局可结算，BP 后方向错误 0 局", text)
+        self.assertIn("不在本次扫描中更新模型", text)
         self.assertGreater(len(text.splitlines()), 6)
 
     def test_legacy_postmatch_review_keys_are_collapsed_to_stable_key(self):
