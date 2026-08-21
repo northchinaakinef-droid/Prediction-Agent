@@ -1199,6 +1199,16 @@ class LiveSupervisor:
                         lines.append(
                             f"第{index}局实际胜者：{winner_team}；BP 后模型判断{'正确' if correct else '错误'}。"
                         )
+                usable_games = [game for game in games if game.get("winner_side") in {"a", "b"}]
+                bp_errors = sum(
+                    1 for game in usable_games
+                    if (("a" if float(game.get("blue_post_draft_win") or 0) >=
+                         float(game.get("red_post_draft_win") or 0) else "b") != game.get("winner_side"))
+                )
+                lines.append(
+                    f"学习标签：系列共 {len(usable_games)} 局可结算，BP 后方向错误 {bp_errors} 局；"
+                    "该标签只进入后续按时间顺序的离线评估，不在本次扫描中更新模型。"
+                )
             factors = self._decisive_factors(state)
             if factors:
                 lines.append("全场关键数据：" + "；".join(factors) + "。")

@@ -890,8 +890,22 @@ def _lol_model_error_readout(details: dict[str, Any], games: list[dict[str, Any]
 def _format_lol_postmatch_evidence(details: dict[str, Any]) -> list[str]:
     games = list(details.get("game_samples") or [])
     if not games:
-        return ["", "深度复盘：", "• 未取得逐局 BP、资源和选手数据，无法做阵容/过程/选手层面的可靠归因。"]
-    lines = ["", "阵容与 BP："]
+        return ["", "数据质量：不足（缺少逐局结构化数据）",
+                "深度复盘：", "• 本场不生成猜测性归因；等待 BP、资源和选手数据补齐后再进入学习样本。"]
+    bp_complete = sum(
+        1 for game in games
+        if len(game.get("blue_champions") or []) == 5 and len(game.get("red_champions") or []) == 5
+    )
+    resource_complete = sum(
+        1 for game in games
+        if any(game.get(key) is not None for key in ("towers_a", "dragons_a", "barons_a"))
+    )
+    player_complete = sum(1 for game in games if game.get("players"))
+    confidence = "高" if bp_complete == resource_complete == player_complete == len(games) else (
+        "中" if bp_complete and resource_complete else "低"
+    )
+    lines = ["", f"数据质量：{confidence}（BP {bp_complete}/{len(games)}｜资源 {resource_complete}/{len(games)}｜选手 {player_complete}/{len(games)}）",
+             "", "阵容与 BP："]
     for game in games:
         index = int(game.get("game_index") or 0)
         blue_players = list(game.get("blue_players") or [])
