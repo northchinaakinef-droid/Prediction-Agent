@@ -49,7 +49,10 @@ def player_display_names(sport: str, roster: tuple[str, ...] | list[str]) -> lis
             elif raw and not raw.casefold().startswith("oe:player:"):
                 displayed.append(raw)
             else:
-                displayed.append(f"选手名待同步{index}")
+                # An opaque ID is never a valid display name.  Returning an
+                # incomplete lineup makes the existing lineup gate suppress
+                # the analysis until the sidecar is rebuilt from all seasons.
+                return []
         return displayed
     return [str(player) for player in roster]
 

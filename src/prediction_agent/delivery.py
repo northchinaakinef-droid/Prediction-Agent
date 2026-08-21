@@ -780,6 +780,13 @@ def _format_prematch_alert(row: dict[str, Any]) -> str:
     analyst_count = int(details.get("analyst_count") or 0)
     if analyst_count:
         lines.append(f"分析师参考：已纳入 {analyst_count} 篇相关公开资料。")
+    analyst_notes = details.get("analyst_notes") or []
+    if analyst_notes:
+        lines.extend(["", "【赛事相关资讯】"])
+        lines.extend(
+            f"• {note.get('source') or '公开来源'}：{note.get('title')}\n  {note.get('link')}"
+            for note in analyst_notes[:5]
+        )
     reasons = details.get("reasons") or row.get("reasons") or []
     lines.extend(["", "预测依据："])
     if reasons:

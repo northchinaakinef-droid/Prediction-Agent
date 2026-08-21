@@ -19,7 +19,7 @@ from .providers.live_data import (
 )
 from .providers.polymarket import PolymarketClient
 from .providers.news import RssNewsProvider
-from .providers.analysts import AnalystFeedProvider
+from .providers.analysts import AnalystFeedProvider, ChineseLolPostProvider, note_matches_event
 from .lol_meta_model import LolDraftGame, load_lol_meta
 from .paper_store import record_post_match_review
 
@@ -220,8 +220,7 @@ class LiveSupervisor:
                     emitted.add((sport, tuple(sorted(wanted))))
                     continue
                 notes = [note for note in analyst_notes.get(sport, [])
-                         if team_a.casefold() in str(note.title).casefold()
-                         or team_b.casefold() in str(note.title).casefold()]
+                         if note_matches_event(note, sport, team_a, team_b)]
                 details = _build_details(sport, team_a, team_b, row, notes)
                 alerts.append(LiveAlert(
                     match_identity, sport, "IMPORTANT", 55, "PREMATCH_ANALYSIS",
@@ -250,8 +249,7 @@ class LiveSupervisor:
                 if key in emitted:
                     continue
                 notes = [note for note in analyst_notes.get(sport, [])
-                         if team_a.casefold() in str(note.title).casefold()
-                         or team_b.casefold() in str(note.title).casefold()]
+                         if note_matches_event(note, sport, team_a, team_b)]
                 title = f"{team_a} vs {team_b}"
                 match_identity = f"{sport}:{':'.join(sorted(wanted))}"
                 details = _build_details(sport, team_a, team_b, row, notes)
@@ -635,8 +633,7 @@ class LiveSupervisor:
                 lines.append("全场关键数据：" + "；".join(factors) + "。")
 
         notes = [note for note in analyst_notes.get(state.sport, [])
-                 if state.team_a.casefold() in str(note.title).casefold()
-                 or state.team_b.casefold() in str(note.title).casefold()]
+                 if note_matches_event(note, state.sport, state.team_a, state.team_b)]
         if notes:
             lines.append(f"公开分析师参考：{len(notes)} 篇（仅作为特征留存，不改变本场结算概率）。")
         lines.append("该复盘文本作为赛后样本沉淀，用于后续模型迭代，不参与当前推送数值计算。")
@@ -710,8 +707,7 @@ class LiveSupervisor:
                     reasons.append("复盘：比赛走势偏离预测，需重点核查阵容克制、资源节奏或临场发挥。")
 
             notes = [note for note in analyst_notes.get(state.sport, [])
-                     if state.team_a.casefold() in str(note.title).casefold()
-                     or state.team_b.casefold() in str(note.title).casefold()]
+                     if note_matches_event(note, state.sport, state.team_a, state.team_b)]
             decisive_factors = self._decisive_factors(state)
             if state.sport == "lol":
                 series_analysis = self._build_series_review_analysis(state, game_samples, analyst_notes)
@@ -1251,10 +1247,12 @@ class LiveSupervisor:
             sport: self._attempt(f"analyst_{sport}", lambda s=sport: AnalystFeedProvider(s).recent())
             for sport in ("lol", "nba")
         }
+        analyst_notes["lol"].extend(
+            self._attempt("analyst_lol_chinese", lambda: ChineseLolPostProvider().recent())
+        )
         for state in states:
             notes = [note for note in analyst_notes.get(state.sport, [])
-                     if state.team_a.casefold() in note.title.casefold()
-                     or state.team_b.casefold() in note.title.casefold()]
+                     if note_matches_event(note, state.sport, state.team_a, state.team_b)]
             if notes:
                 state.features["analyst_notes"] = [{"title": note.title, "link": note.link,
                                                     "source": note.source} for note in notes[:5]]

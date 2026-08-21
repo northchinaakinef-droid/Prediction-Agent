@@ -15,8 +15,7 @@ from prediction_agent.risk import normalize_two_way, recommend
 class CoreTests(unittest.TestCase):
     def test_unresolved_lol_player_ids_are_not_exposed(self):
         names = player_display_names("lol", ["oe:player:definitely-unmapped"])
-        self.assertEqual(names, ["选手名待同步1"])
-        self.assertNotIn("oe:player:", names[0])
+        self.assertEqual(names, [])
 
     def test_remove_vig(self):
         a, b = normalize_two_way(0.55, 0.55)
