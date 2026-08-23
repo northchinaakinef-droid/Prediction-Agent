@@ -3,8 +3,10 @@ import json
 import logging
 import math
 import os
+import re
+from time import perf_counter
 import unicodedata
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -18,10 +20,10 @@ from .providers.live_data import (
     GridOpenAccessProvider, HupuNbaProvider, NbaOfficialProvider,
     PandaScoreProvider, SportSrcNbaProvider, TheSportsDbNbaProvider,
 )
-from .risk import RiskBudgetLedger, RiskConfig, kelly_fraction, paper_recommend, recommend
+from .risk import RiskBudgetLedger, RiskConfig, binary_share_math, kelly_fraction, paper_recommend, recommend
 from .entities import canonical_team, normalized_name
 from .betting_gate import bet_status, can_place_real_bet, should_place_virtual_bet
-from .context import player_display_names, recent_form_for
+from .context import load_recent_form, player_display_names, recent_form_artifact_generated_at, recent_form_for
 from .paper_store import (
     calc_roi, count_settled_virtual_bets, count_virtual_bets, current_drawdown,
     record_virtual_bet, virtual_account_balance,
@@ -31,6 +33,19 @@ from .narrative import build_pre_match_summary
 from .schedule import (
     LolScheduleDiscovery, SourceResult, append_schedule_audit, build_schedule_audit, make_match,
 )
+from .coverage_service import CoverageStore, build_coverage_report
+from .roster import historical_roster
+from .ai.analyst import EvidenceAnalyst
+from .ai.cache import AnalysisCache
+from .ai.client import client_from_env
+from .ai.prompts import PROMPT_VERSION
+from .ai.schemas import Evidence
+from .feedback import FeedbackStore, PredictionSnapshot
+from .health_report import build_system_health
+from .intelligence import DataQualityScore, RecommendationState
+from .evidence_pipeline import EvidenceStore, build_match_evidence, evidence_availability, evidence_hash
+from .provider_health import PROVIDER_CAPABILITIES, ProviderHealth, ProviderHealthStore
+from .lifecycle import MatchLifecycleStore
 TAGS = {"nba": "745", "lol": "65", "cs2": "100780"}
 def _paper_trading_enabled() -> bool:
     """Paper betting can run before real-money ROI acceptance.
@@ -38,6 +53,8 @@ def _paper_trading_enabled() -> bool:
     separate, stricter ``approved_for_real_money`` flag and is never implied.
     """
     return os.getenv("PAPER_TRADING_ENABLED", "true").casefold() == "true"
+def _real_trading_enabled() -> bool:
+    return os.getenv("REAL_TRADING_DISABLED", "true").casefold() == "false"
 def _in_horizon(scheduled: datetime | None, now: datetime) -> bool:
     hours = float(os.getenv("MARKET_HORIZON_HOURS", "30"))
     return scheduled is not None and now < scheduled <= now + timedelta(hours=hours)
@@ -167,6 +184,180 @@ def _main_market(event: dict) -> dict | None:
         (m for m in candidates if m.get("question") == event.get("title")), None)
 
 
+def _numeric_market_value(*values: object) -> float:
+    parsed = []
+    for value in values:
+        try:
+            parsed.append(float(value))
+        except (TypeError, ValueError):
+            continue
+    return max(parsed, default=0.0)
+
+
+def _daily_market_quality(event: dict, market: dict, risk_config: RiskConfig) -> dict:
+    """Apply the configurable liquidity/volume gate used by the daily push."""
+    volume = _numeric_market_value(
+        market.get("volume"), market.get("volumeNum"), market.get("volume24hr"),
+        event.get("volume"), event.get("volumeNum"), event.get("volume24hr"),
+    )
+    liquidity = _numeric_market_value(
+        market.get("liquidity"), market.get("liquidityNum"), market.get("liquidityClob"),
+        event.get("liquidity"), event.get("liquidityNum"),
+    )
+    minimum_volume = float(os.getenv("MIN_DAILY_MARKET_VOLUME", "1000"))
+    minimum_liquidity = float(os.getenv("MIN_DAILY_MARKET_LIQUIDITY", str(risk_config.min_available_size)))
+    return {
+        "volume": volume, "liquidity": liquidity,
+        "minimum_volume": minimum_volume, "minimum_liquidity": minimum_liquidity,
+        "qualified": volume >= minimum_volume and liquidity >= minimum_liquidity,
+    }
+
+
+def _market_movement_from_history(history: list[dict], now: datetime) -> dict | None:
+    points = sorted((int(item.get("t")), float(item.get("p"))) for item in history
+                    if item.get("t") is not None and item.get("p") is not None)
+    if len(points) < 2:
+        return None
+    latest_t, latest_price = points[-1]
+    def movement(minutes: int):
+        cutoff = int(now.timestamp()) - minutes * 60
+        prior = min(points, key=lambda item: abs(item[0] - cutoff))
+        return latest_price - prior[1]
+    return {"source": "polymarket_clob_prices_history", "latest_timestamp": latest_t,
+            "latest_trade_or_mark": latest_price, "movement_5m": movement(5),
+            "movement_15m": movement(15), "movement_1h": movement(60),
+            "historical_depth_available": False}
+
+
+def _attach_data_quality(row: dict, sport: str, model_status: str = "OK") -> None:
+    missing: list[str] = []
+    lineup = str(row.get("lineup_status") or "UNKNOWN").upper()
+    roster_quality = {"CONFIRMED": 1.0, "EXPECTED": .7, "HISTORICAL": .4}.get(lineup, .1)
+    if lineup != "CONFIRMED":
+        missing.append("CONFIRMED_LINEUP")
+    recent_available = bool(row.get("recent_form_a") and row.get("recent_form_b"))
+    if not recent_available:
+        missing.append("RECENT_FORM")
+    if sport == "nba":
+        if not row.get("injury_status"):
+            missing.append("INJURY_STATUS")
+        if not row.get("confirmed_starters"):
+            missing.append("CONFIRMED_STARTERS")
+    quality = DataQualityScore(
+        schedule_quality=1.0 if row.get("schedule_match_id") else .3,
+        roster_quality=roster_quality,
+        market_quality=1.0 if row.get("market_quality_qualified") else .3,
+        stat_quality=.85 if recent_available else .25,
+        news_quality=.7 if row.get("analyst_notes") else .3,
+        model_freshness=1.0 if model_status == "OK" else .2,
+        missing=tuple(sorted(set(missing))),
+    )
+    if row.get("market_mapping_status") in {"MARKET_NOT_FOUND", "NOT_IN_SCHEDULE"}:
+        state = RecommendationState.NO_MARKET
+    elif quality.level == "LOW":
+        state = RecommendationState.WATCH
+    elif row.get("action") == "BET" and not quality.missing and float(row.get("expected_value") or 0) > .15:
+        state = RecommendationState.STRONG_VALUE
+    elif row.get("action") == "BET":
+        state = RecommendationState.VALUE
+    else:
+        state = RecommendationState.WATCH
+    row.update({
+        "data_quality_score": quality.score,
+        "data_quality_level": quality.level,
+        "data_quality_missing": list(quality.missing),
+        "recommendation_state": state.value,
+    })
+
+
+def _apply_intelligence_gate(row: dict, sport: str) -> None:
+    missing = set(row.get("data_quality_missing") or [])
+    critical = {"lol": {"RECENT_FORM"}, "cs2": {"RECENT_FORM", "ROSTER", "MAP_DATA"},
+                "nba": {"INJURY_STATUS", "CONFIRMED_STARTERS"}}[sport]
+    critical_missing = sorted(value for value in missing if value in critical or
+                              (value.startswith("STALE_") and value[6:] in critical))
+    score = float(row.get("data_quality_score") or 0)
+    adjusted_edge = float(row.get("adjusted_edge") or row.get("edge") or 0)
+    gate_reason = None
+    if score < .6:
+        gate_reason = "LOW_DATA_QUALITY"
+    elif critical_missing:
+        gate_reason = "CRITICAL_EVIDENCE_MISSING:" + ",".join(critical_missing)
+    elif score < .8 and adjusted_edge < .08:
+        gate_reason = "MEDIUM_DATA_QUALITY_REQUIRES_8PCT_EDGE"
+    if gate_reason:
+        row.update({"action": "NO_BET", "stake": 0.0, "stake_fraction": 0.0,
+                    "decision": "NO TRADE", "recommendation_state": "WATCH",
+                    "decision_gate": gate_reason})
+        row["reasons"] = list(row.get("reasons") or []) + [gate_reason]
+    else:
+        row["decision_gate"] = "PASS"
+
+
+def _attach_risk_audit(row: dict, bankroll: float, config: RiskConfig) -> None:
+    market_price = float(row.get("execution_price") or row.get("market_probability") or 0)
+    market_probability = float(row.get("market_probability") or market_price)
+    probability = float(row.get("final_probability") or row.get("model_probability") or .5)
+    raw_edge = probability - market_probability
+    quality = float(row.get("data_quality_score") or 0)
+    # Signed penalties shrink probability toward the market on either side.
+    data_penalty = max(0.0, 1 - quality) * raw_edge
+    confidence = float(row.get("ai_confidence") or (1.0 if row.get("ai_status") == "LLM_ACTIVE" else 0.0))
+    ai_penalty = (1 - confidence) * float(row.get("ai_adjustment") or 0)
+    # Shrink only the Quant contribution toward the market.  Do not derive this
+    # from row.edge because that field may already include execution costs.
+    quant_confidence = float(row.get("confidence") or 0)
+    quant_edge = float(row.get("model_probability") or probability) - market_probability
+    uncertainty_penalty = (1 - quant_confidence) * quant_edge
+    fee_rate = max(0.0, float(row.get("estimated_cost_rate") or 0))
+    slippage = max(0.0, float(row.get("estimated_slippage_per_share") or 0))
+    adjusted_probability = max(.001, min(.999, probability - data_penalty
+                                         - uncertainty_penalty - ai_penalty))
+    economics = binary_share_math(adjusted_probability, market_price,
+                                  fee_rate_on_capital=fee_rate,
+                                  slippage_per_share=slippage)
+    adjusted_edge = economics["expected_profit_per_share"]
+    odds = economics["decimal_odds"]
+    kelly = kelly_fraction(adjusted_probability, odds) if odds > 1 else 0.0
+    fractional = kelly * config.kelly_scale; before_cap = bankroll * fractional
+    final_stake = float(row.get("stake") or 0)
+    cap_reason = "NONE" if final_stake >= before_cap else ("DECISION_GATE" if row.get("decision_gate") != "PASS" else "RISK_CAP")
+    row.update({"market_fair_probability": market_probability, "raw_model_edge": raw_edge,
+                "executable_edge": economics["executable_edge"],
+                "expected_profit_per_share": economics["expected_profit_per_share"],
+                "expected_roi_on_capital": economics["expected_roi_on_capital"],
+                "adjusted_edge": adjusted_edge, "risk_calculation": {
+        "model_probability": row.get("model_probability"), "market_fair_probability": market_probability,
+        "execution_price": market_price, "decimal_odds": odds, "raw_model_edge": raw_edge,
+        "data_quality_penalty": data_penalty, "uncertainty_penalty": uncertainty_penalty,
+        "quant_confidence": quant_confidence,
+        "ai_confidence_penalty": ai_penalty, "fee_rate_on_capital": fee_rate,
+        "adjusted_probability": adjusted_probability, **economics,
+        "kelly_fraction": kelly, "fractional_kelly": fractional,
+        "single_bet_cap": bankroll * config.max_bet_fraction,
+        "event_cap": bankroll * config.max_event_risk_fraction,
+        "daily_cap": bankroll * config.max_daily_risk_fraction,
+        "stake_before_cap": before_cap, "cap_reason": cap_reason, "final_stake": final_stake}})
+
+
+def _apply_daily_market_gate(rec, quality: dict):
+    if rec.action != "BET" or quality["qualified"]:
+        return rec
+    reasons = list(rec.reasons)
+    if quality["volume"] < quality["minimum_volume"]:
+        reasons.append(
+            f"market volume below daily threshold ({quality['volume']:.0f} < {quality['minimum_volume']:.0f})"
+        )
+    if quality["liquidity"] < quality["minimum_liquidity"]:
+        reasons.append(
+            f"market liquidity below daily threshold ({quality['liquidity']:.0f} < {quality['minimum_liquidity']:.0f})"
+        )
+    return replace(
+        rec, action="NO_BET", decision="NO TRADE", stake=0.0,
+        stake_fraction=0.0, reasons=tuple(reasons),
+    )
+
+
 def _scheduled_market_events(sport: str, events: list[dict],
                              schedule_matches: list[dict]) -> list[dict]:
     """Keep only market events present in today's discovered schedule."""
@@ -244,12 +435,14 @@ def analyze_sport(sport: str, model: EloModel | NbaModel, evaluation: dict, even
                 confidence=.75 if probability_ok else .25,
                 spread=float(market["spread"]) if market.get("spread") is not None else None,
                 available_size=float(market.get("liquidity") or 0), estimated_cost=cost,
-                trading_enabled=probability_ok and not started,
+                trading_enabled=_real_trading_enabled() and probability_ok and not started,
                 kelly_scale=risk_config.kelly_scale, max_bet_fraction=cap,
                 min_edge=risk_config.min_edge, min_confidence=risk_config.min_confidence,
                 max_spread=risk_config.max_spread, min_available_size=risk_config.min_available_size,
                 max_depth_fraction=risk_config.max_depth_fraction, risk_reasons=risk_reasons,
             )
+        market_quality = _daily_market_quality(event, market, risk_config)
+        rec = _apply_daily_market_gate(rec, market_quality)
         if rec.action == "BET":
             ledger.commit(event_key, group, rec.stake_fraction)
         reasons = (model.explain(team_a, team_b, scheduled)
@@ -273,7 +466,9 @@ def analyze_sport(sport: str, model: EloModel | NbaModel, evaluation: dict, even
         row.update({
             "sport": sport, "event": _text(event.get("title") or ""),
             "scheduled_start": scheduled.isoformat() if scheduled else None,
-            "market_probability": prices[side], "execution_price": ask,
+            "market_probability": prices[side], "market_fair_probability": prices[side],
+            "execution_price": ask, "estimated_cost_rate": cost,
+            "market_token_id": (_field(market.get("clobTokenIds")) + [None, None])[side],
             "edge": rec.decision_probability - ask - cost,
             "probability_eligible": probability_ok,
             "real_money_approved": money_ok,
@@ -283,9 +478,16 @@ def analyze_sport(sport: str, model: EloModel | NbaModel, evaluation: dict, even
             "decision_window": decision_window,
             "probability_plausible": not bool(sanity),
             "schedule_matched": bool(schedule_match and schedule_match.get("market_mapping_status") == "MATCHED"),
+            "schedule_match_id": schedule_match.get("match_id") if schedule_match else None,
             "market_mapping_status": schedule_match.get("market_mapping_status") if schedule_match else "NOT_IN_SCHEDULE",
             "lineup_status": "未知",
             "ev_tier": _ev_tier(rec.expected_value),
+            "market_volume": market_quality["volume"],
+            "market_liquidity": market_quality["liquidity"],
+            "minimum_market_volume": market_quality["minimum_volume"],
+            "minimum_market_liquidity": market_quality["minimum_liquidity"],
+            "market_quality_qualified": market_quality["qualified"],
+            "daily_candidate": rec.action == "BET" and rec.expected_value > 0,
             "direction_match": bool(direction_match),
             "reasons": reasons + list(rec.reasons),
         })
@@ -411,12 +613,14 @@ def _research_row(sport: str, event: dict, market: dict, scheduled: datetime | N
             confidence=.75 if probability_ok else .25,
             spread=float(market["spread"]) if market.get("spread") is not None else None,
             available_size=float(market.get("liquidity") or 0), estimated_cost=cost,
-            trading_enabled=probability_ok and not started,
+            trading_enabled=_real_trading_enabled() and probability_ok and not started,
             kelly_scale=risk_config.kelly_scale, max_bet_fraction=cap,
             min_edge=risk_config.min_edge, min_confidence=risk_config.min_confidence,
             max_spread=risk_config.max_spread, min_available_size=risk_config.min_available_size,
             max_depth_fraction=risk_config.max_depth_fraction, risk_reasons=risk_reasons,
         )
+    market_quality = _daily_market_quality(event, market, risk_config)
+    rec = _apply_daily_market_gate(rec, market_quality)
     if rec.action == "BET":
         ledger.commit(event_key, group, rec.stake_fraction)
     if not probability_ok:
@@ -435,7 +639,9 @@ def _research_row(sport: str, event: dict, market: dict, scheduled: datetime | N
     row.update({
         "sport": sport, "event": _text(event.get("title") or ""),
         "scheduled_start": scheduled.isoformat() if scheduled else None,
-        "market_probability": prices[side], "execution_price": ask,
+        "market_probability": prices[side], "market_fair_probability": prices[side],
+        "execution_price": ask, "estimated_cost_rate": cost,
+        "market_token_id": (_field(market.get("clobTokenIds")) + [None, None])[side],
         "edge": rec.decision_probability - ask - cost,
         "probability_eligible": probability_ok,
         "real_money_approved": money_ok,
@@ -445,9 +651,16 @@ def _research_row(sport: str, event: dict, market: dict, scheduled: datetime | N
         "decision_window": decision_window,
         "probability_plausible": not bool(sanity),
         "schedule_matched": bool(schedule_match and schedule_match.get("market_mapping_status") == "MATCHED"),
+        "schedule_match_id": schedule_match.get("match_id") if schedule_match else None,
         "market_mapping_status": schedule_match.get("market_mapping_status") if schedule_match else "NOT_IN_SCHEDULE",
         "lineup_status": lineup_status,
         "ev_tier": _ev_tier(rec.expected_value),
+        "market_volume": market_quality["volume"],
+        "market_liquidity": market_quality["liquidity"],
+        "minimum_market_volume": market_quality["minimum_volume"],
+        "minimum_market_liquidity": market_quality["minimum_liquidity"],
+        "market_quality_qualified": market_quality["qualified"],
+        "daily_candidate": rec.action == "BET" and rec.expected_value > 0,
         "direction_match": bool(direction_match),
         "reasons": reasons + list(rec.reasons),
     })
@@ -477,12 +690,14 @@ def analyze_cs2(model: Cs2Model, evaluation: dict, events: list[dict], *,
         probability = model.probability(a, b, roster_a, roster_b)
         known = model.team_games.get(a, 0) >= 10 and model.team_games.get(b, 0) >= 10
         roster_ok = len(roster_a) == len(roster_b) == 5 and _roster_fresh(model.team_last_game, (a, b), now, 60)
-        lineup_status = _lineup_status(roster_a, roster_b, model.team_last_game, (a, b), now, 60)
+        roster_state_a, roster_state_b = historical_roster(roster_a), historical_roster(roster_b)
+        lineup_status = "HISTORICAL" if roster_a and roster_b else "UNKNOWN"
         probability_ok = bool(evaluation.get("approved_for_probability_use")) and known and roster_ok
         reasons = [
             f"阵容感知胜率：{outcomes[0]} {probability:.1%}，{outcomes[1]} {1-probability:.1%}。",
             f"历史样本：{a} {model.team_games.get(a, 0)} 场，{b} {model.team_games.get(b, 0)} 场。",
             "当前基线包含战队和五人阵容强度；地图池、veto 与 LAN/线上层仍在补充。",
+            roster_state_a.explanatory_note,
         ]
         row = _research_row("cs2", event, market, scheduled, outcomes, prices,
                              [probability, 1-probability], probability_ok=probability_ok,
@@ -495,12 +710,27 @@ def analyze_cs2(model: Cs2Model, evaluation: dict, events: list[dict], *,
             "lineup_b": player_display_names("cs2", roster_b),
             "recent_form_a": recent_form_for("cs2", a),
             "recent_form_b": recent_form_for("cs2", b),
+            "recent_form_artifact_generated_at": recent_form_artifact_generated_at(),
+            "roster_published_at": min((model.team_last_game.get(a), model.team_last_game.get(b)),
+                                       key=lambda value: value or "") or None,
             "best_of": int(schedule_match.get("best_of") or 0) if schedule_match else 1,
             "format": f"BO{int(schedule_match.get('best_of') or 1)}" if schedule_match else "BO1",
             "map_strengths_a": [],
             "map_strengths_b": [],
             "sample_a": model.team_games.get(a, 0),
             "sample_b": model.team_games.get(b, 0),
+            "roster_status_a": roster_state_a.status.value,
+            "roster_status_b": roster_state_b.status.value,
+            "entity_debug": {
+                "team_a": {"canonical_team_id": a, "provider_team_name": outcomes[0],
+                           "entity_match_status": "MATCHED" if a in model.team_ratings else "TRAINING_DATA_MISSING",
+                           "roster_rows": len(roster_a), "recent_form_rows": (recent_form_for("cs2", a) or {}).get("last_n", 0),
+                           "player_rows": len(roster_a)},
+                "team_b": {"canonical_team_id": b, "provider_team_name": outcomes[1],
+                           "entity_match_status": "MATCHED" if b in model.team_ratings else "TRAINING_DATA_MISSING",
+                           "roster_rows": len(roster_b), "recent_form_rows": (recent_form_for("cs2", b) or {}).get("last_n", 0),
+                           "player_rows": len(roster_b)},
+            },
         })
         rows.append(row)
     return rows
@@ -529,12 +759,14 @@ def analyze_lol_meta(model: LolMetaModel, evaluation: dict, events: list[dict], 
         probability = series_probability(neutral_game_p, best_of)
         known = model.team_games.get(a, 0) >= 10 and model.team_games.get(b, 0) >= 10
         roster_ok = len(roster_a) == len(roster_b) == 5 and _roster_fresh(model.team_last_game, (a, b), now, 90)
-        lineup_status = _lineup_status(roster_a, roster_b, model.team_last_game, (a, b), now, 90)
+        roster_state_a, roster_state_b = historical_roster(roster_a), historical_roster(roster_b)
+        lineup_status = "HISTORICAL" if roster_a and roster_b else "UNKNOWN"
         probability_ok = bool(evaluation.get("approved_for_probability_use")) and known and roster_ok
         reasons = [
             f"赛前阵容模型：{outcomes[0]} {probability:.1%}，{outcomes[1]} {1-probability:.1%}（BO{best_of}）。",
             f"历史样本：{a} {model.team_games.get(a, 0)} 局，{b} {model.team_games.get(b, 0)} 局。",
             "BP 未开始时不使用英雄选择；BP 完成后必须重新计算版本英雄强度与选手英雄熟练度。",
+            roster_state_a.explanatory_note,
         ]
         heroes, coverage_a, coverage_b = _patch_meta_context(model, "lol", roster_a, roster_b)
         recent_a = recent_form_for("lol", a)
@@ -544,10 +776,12 @@ def analyze_lol_meta(model: LolMetaModel, evaluation: dict, events: list[dict], 
                 f"近期状态：{a} 最近{recent_a['last_n']}场 {recent_a['wins']}胜{recent_a['losses']}负；"
                 f"{b} 最近{recent_b['last_n']}场 {recent_b['wins']}胜{recent_b['losses']}负。"
             )
-        if heroes:
+        if heroes and coverage_a is not None and coverage_b is not None:
             reasons.append(
                 f"版本池覆盖：{a} {coverage_a:.0f}%，{b} {coverage_b:.0f}%（基于冻结训练样本，不含未开始的 BP）。"
             )
+        elif heroes:
+            reasons.append("版本英雄池存在，但至少一队的历史阵容覆盖率缺失；未使用默认值替代。")
         row = _research_row("lol", event, market, scheduled, outcomes, prices,
                             [probability, 1-probability], probability_ok=probability_ok,
                             money_ok=bool(evaluation.get("approved_for_real_money")),
@@ -559,6 +793,9 @@ def analyze_lol_meta(model: LolMetaModel, evaluation: dict, events: list[dict], 
             "lineup_b": player_display_names("lol", roster_b),
             "recent_form_a": recent_a,
             "recent_form_b": recent_b,
+            "recent_form_artifact_generated_at": recent_form_artifact_generated_at(),
+            "roster_published_at": min((model.team_last_game.get(a), model.team_last_game.get(b)),
+                                       key=lambda value: value or "") or None,
             "best_of": best_of,
             "format": f"BO{best_of}",
             "patch_meta_heroes": heroes,
@@ -566,6 +803,18 @@ def analyze_lol_meta(model: LolMetaModel, evaluation: dict, events: list[dict], 
             "meta_coverage_b": coverage_b,
             "sample_a": model.team_games.get(a, 0),
             "sample_b": model.team_games.get(b, 0),
+            "roster_status_a": roster_state_a.status.value,
+            "roster_status_b": roster_state_b.status.value,
+            "entity_debug": {
+                "team_a": {"canonical_team_id": a, "provider_team_name": outcomes[0],
+                           "entity_match_status": "MATCHED" if a in model.team_ratings else "TRAINING_DATA_MISSING",
+                           "roster_rows": len(roster_a), "recent_form_rows": (recent_a or {}).get("last_n", 0),
+                           "player_rows": len(roster_a)},
+                "team_b": {"canonical_team_id": b, "provider_team_name": outcomes[1],
+                           "entity_match_status": "MATCHED" if b in model.team_ratings else "TRAINING_DATA_MISSING",
+                           "roster_rows": len(roster_b), "recent_form_rows": (recent_b or {}).get("last_n", 0),
+                           "player_rows": len(roster_b)},
+            },
         })
         rows.append(row)
     return rows
@@ -597,6 +846,9 @@ def run_all(model_dir: str | Path, output: str | Path, *, now: datetime | None =
         logging.exception("run_all: unable to compute drawdown from paper_store")
         drawdown = 0.0
     ledger.paper_mode = _paper_trading_enabled()
+    ai_analyst = EvidenceAnalyst(client_from_env(), AnalysisCache(paper_db))
+    feedback_store = FeedbackStore(paper_db)
+    evidence_store = EvidenceStore(paper_db)
     if drawdown >= risk_config.drawdown_circuit_fraction:
         if ledger.paper_mode:
             ledger.drawdown_level = "warn"
@@ -619,6 +871,7 @@ def run_all(model_dir: str | Path, output: str | Path, *, now: datetime | None =
         market_search=market_search,
     )
     def external_source(name, sport, call):
+        attempted = datetime.now(timezone.utc); started = perf_counter()
         try:
             events = call()
             matches = [make_match(
@@ -626,10 +879,12 @@ def run_all(model_dir: str | Path, output: str | Path, *, now: datetime | None =
                 start_time=row.start_time, event_name=row.event_name, best_of=row.best_of,
                 event_status=row.status,
             ) for row in events if row.start_time.astimezone(zone).date() == report_day]
-            return SourceResult(name, True, matches)
+            return SourceResult(name, True, matches, latency_ms=int((perf_counter() - started) * 1000),
+                                last_attempt_at=attempted, last_success_at=datetime.now(timezone.utc))
         except Exception as error:
             logging.exception("external_source %s failed", name)
-            return SourceResult(name, False, [], repr(error))
+            return SourceResult(name, False, [], repr(error), int((perf_counter() - started) * 1000),
+                                attempted, None)
     nba_sources = [
         external_source("nba_official", "nba", lambda: NbaOfficialProvider().schedule(report_day)),
         external_source("hupu", "nba", lambda: HupuNbaProvider().schedule(report_day)),
@@ -698,17 +953,110 @@ def run_all(model_dir: str | Path, output: str | Path, *, now: datetime | None =
                                        schedule_matches=audit_matches[sport], risk_config=risk_config,
                                        ledger=ledger, group_key=f"{sport}:{report_day.isoformat()}",
                                        paper_db=paper_db)
+        try:
+            model_age = (report_day - datetime.fromisoformat(str(model.trained_through)).date()).days
+        except ValueError:
+            model_age = 10**9
+        row_model_status = "STALE" if model_age > int(os.getenv("MODEL_RETRAIN_INTERVAL_DAYS", "42")) else "OK"
+        for row in sport_rows:
+            match_id = str(row.get("schedule_match_id") or row.get("event_id") or "")
+            token_id = row.get("market_token_id")
+            if token_id:
+                try:
+                    history = client.price_history(str(token_id), start_ts=int(now.timestamp()) - 4 * 3600,
+                                                   end_ts=int(now.timestamp()), fidelity=5)
+                    row["market_movement"] = _market_movement_from_history(history, now)
+                except Exception as error:
+                    row["market_movement"] = None
+                    row["market_movement_error"] = repr(error)
+            evidence = build_match_evidence(row, sport, match_id, now)
+            evidence_store.put_many(evidence)
+            availability = evidence_availability(evidence)
+            baseline = float(row.get("model_probability") or .5)
+            ai_result = ai_analyst.analyze(match_id=match_id, baseline_probability=baseline, evidence=evidence)
+            row.update({
+                "quant_baseline_probability": baseline,
+                "quant_model_version": str(model.trained_through),
+                "ai_prompt_version": PROMPT_VERSION,
+                "ai_model_name": os.getenv("LLM_MODEL") if os.getenv("LLM_API_KEY") else None,
+                "ai_status": ai_result.status,
+                "ai_adjustment": ai_result.adjustment,
+                "ai_adjustment_status": ai_result.adjustment_status,
+                "ai_confidence": ai_result.analysis.confidence if ai_result.analysis else 0.0,
+                "ai_used_evidence_ids": ai_result.analysis.used_evidence_ids if ai_result.analysis else [],
+                "ai_risk_flags": ai_result.analysis.risk_flags if ai_result.analysis else [],
+                "ai_unknowns": ai_result.analysis.unknowns if ai_result.analysis else [],
+                "ai_cache_hit": ai_result.cache_hit,
+                "final_probability": ai_result.final_probability,
+                "ai_analysis": ai_result.analysis.as_dict() if ai_result.analysis else None,
+                "evidence": [item.as_dict() for item in evidence],
+                "evidence_count": len(evidence),
+                "evidence_ids": [item.evidence_id for item in evidence],
+                "evidence_types": [item.evidence_type for item in evidence],
+                "evidence_hash": evidence_hash(evidence),
+                **availability,
+            })
+            _attach_data_quality(row, sport, row_model_status)
+            stale_critical = sorted({kind for kind, state in row.get("evidence_type_status", {}).items()
+                                     if state == "AVAILABLE_STALE" and kind in {
+                                         "ROSTER", "RECENT_FORM", "INJURY", "CONFIRMED_STARTERS"}})
+            if stale_critical:
+                row["data_quality_missing"] = sorted(set(row["data_quality_missing"]) |
+                                                     {f"STALE_{kind}" for kind in stale_critical})
+                row["data_quality_score"] = max(0.0, row["data_quality_score"] - .1 * len(stale_critical))
+                row["data_quality_level"] = "LOW" if row["data_quality_score"] < .6 else "MEDIUM"
+            provisional_fraction = float(row.get("stake_fraction") or 0) if row.get("action") == "BET" else 0.0
+            _apply_intelligence_gate(row, sport)
+            if provisional_fraction and row.get("action") != "BET":
+                ledger.release(str(row.get("event_id") or match_id),
+                               f"{sport}:{report_day.isoformat()}", provisional_fraction)
+            _attach_risk_audit(row, bankroll, risk_config)
+            row["narrative_summary"] = build_pre_match_summary(row)
+            snapshot = PredictionSnapshot(
+                match_id=match_id, prediction_time=now.isoformat(),
+                quant_model_version=str(model.trained_through), ai_prompt_version=PROMPT_VERSION,
+                ai_model_name=row["ai_model_name"], baseline_probability=baseline,
+                ai_adjustment=ai_result.adjustment, final_probability=ai_result.final_probability,
+                market_fair_probability=row.get("market_fair_probability"),
+                edge=(ai_result.final_probability - float(row["execution_price"]))
+                if row.get("execution_price") is not None else None,
+                features_json={"sport": sport, "recent_form_a": row.get("recent_form_a"),
+                               "recent_form_b": row.get("recent_form_b"),
+                               "lineup_status": row.get("lineup_status"),
+                               "data_quality_level": row.get("data_quality_level"),
+                               "data_quality_missing": row.get("data_quality_missing")},
+                evidence_json=row["evidence"],
+                risk_flags_json=(ai_result.analysis.risk_flags if ai_result.analysis else [ai_result.error or "LLM unavailable"]),
+                recommendation=str(row.get("action") or "NO_BET"), position_size=float(row.get("stake") or 0),
+                llm_provider=os.getenv("LLM_PROVIDER") if os.getenv("LLM_API_KEY") else None,
+                data_quality_score=float(row.get("data_quality_score") or 0),
+                missing_evidence=tuple(row.get("data_quality_missing") or ()),
+                evidence_ids=tuple(row.get("evidence_ids") or ()), evidence_hash=row.get("evidence_hash") or "",
+                ai_confidence=float(row.get("ai_confidence") or 0), market_price=row.get("execution_price"),
+                adjusted_edge=row.get("adjusted_edge"),
+                expected_profit_per_share=row.get("expected_profit_per_share"),
+                expected_roi_on_capital=row.get("expected_roi_on_capital"),
+                execution_price=row.get("execution_price"),
+                decimal_odds=(row.get("risk_calculation") or {}).get("decimal_odds"),
+                raw_model_edge=row.get("raw_model_edge"), executable_edge=row.get("executable_edge"),
+                risk_inputs={"bankroll": bankroll, "config": asdict(risk_config)},
+                risk_output=row.get("risk_calculation"), created_at=now.isoformat(),
+            )
+            row["prediction_snapshot_id"] = feedback_store.save_snapshot(snapshot)
         recommendations.extend(sport_rows)
         statuses[sport] = {
             "ready": True, "artifact_ready": True,
             "trained_through": model.trained_through, "samples": model.samples,
             "probability_approved": bool(evaluation.get("approved_for_probability_use")),
             "real_money_approved": bool(evaluation.get("approved_for_real_money")),
+            "model_status": row_model_status,
+            "days_since_training": model_age,
             "today_scheduled_matches": len(audit_matches[sport]),
             "today_markets": len(sport_rows),
             "today_prestart_markets": sum(not row["market_started"] for row in sport_rows),
             "today_probability_eligible": sum(row["probability_eligible"] for row in sport_rows),
             "today_bet_candidates": sum(row["action"] == "BET" for row in sport_rows),
+            "model_team_count": len(getattr(model, "team_ratings", {}) or {}),
         }
     flag_threshold = float(os.getenv("FLAG_DISAGREEMENT_THRESHOLD", str(FLAG_DISAGREEMENT_DEFAULT)))
     staleness = {}
@@ -726,6 +1074,27 @@ def run_all(model_dir: str | Path, output: str | Path, *, now: datetime | None =
         "max_days": max_staleness,
         "interval_days": retrain_interval,
         "warning": max_staleness > retrain_interval,
+    }
+    for sport, age in staleness.items():
+        if sport in statuses:
+            statuses[sport]["model_status"] = "STALE" if age > retrain_interval else "OK"
+            statuses[sport]["days_since_training"] = age
+    recent_form_health = load_recent_form()
+    cs2_form = recent_form_health.get("cs2") or {}
+    cs2_model_teams = int(statuses.get("cs2", {}).get("model_team_count") or 0)
+    recent_artifact = Path("artifacts/recent_form.json")
+    data_health = {
+        "lol_recent_form": "OK" if recent_form_health.get("lol") else "ERROR",
+        "cs2_recent_form": "OK" if cs2_form else "ERROR",
+        "cs2_recent_form_detail": {
+            "status": "OK" if cs2_form else "ERROR", "team_count": len(cs2_form),
+            "latest_match_at": max((str(value.get("latest_match_at")) for value in cs2_form.values()
+                                    if value.get("latest_match_at")), default=None),
+            "coverage_ratio": (len(cs2_form) / cs2_model_teams) if cs2_model_teams else 0.0,
+            "artifact_generated_at": datetime.fromtimestamp(recent_artifact.stat().st_mtime, timezone.utc).isoformat()
+                                     if recent_artifact.exists() else None,
+            "alert": None if cs2_form else "DATA_SOURCE_FAILURE",
+        },
     }
     flagged = flag_rows(recommendations, flag_threshold)
     if ledger.breaker_reason:
@@ -755,6 +1124,14 @@ def run_all(model_dir: str | Path, output: str | Path, *, now: datetime | None =
         recommendations, bankroll, ledger.daily_committed, risk_config.max_daily_risk_fraction,
     )
     paper_mode = "已开启" if _paper_trading_enabled() else "未开启"
+    all_schedule_matches = [match for rows in audit_matches.values() for match in rows]
+    coverage = build_coverage_report(
+        report_day.isoformat(), all_schedule_matches, recommendations,
+        {sport: bool(status.get("ready")) for sport, status in statuses.items()},
+    )
+    CoverageStore(os.getenv("COVERAGE_DB_PATH", paper_db)).save(coverage)
+    lifecycle_store = MatchLifecycleStore(os.getenv("LIFECYCLE_DB_PATH", paper_db))
+    lifecycle_rows = lifecycle_store.observe(all_schedule_matches, recommendations, now)
     risk_notes = [
         "NBA、LoL、CS2 分别训练和验收；CBA 已暂停。",
         f"虚拟投注：{paper_mode}；仅写入 paper.db，不涉及真实资金。",
@@ -764,10 +1141,34 @@ def run_all(model_dir: str | Path, output: str | Path, *, now: datetime | None =
         risk_notes.append(ledger.breaker_reason)
     if ledger.warn_reason:
         risk_notes.append(ledger.warn_reason)
+    system_health = build_system_health(
+        audits=audits, statuses=statuses, data_health=data_health,
+        llm_provider=os.getenv("LLM_PROVIDER"), llm_configured=bool(os.getenv("LLM_API_KEY")),
+    )
+    provider_health = {}
+    for sport, source_rows in {"lol": lol_sources, "nba": nba_sources, "cs2": cs2_sources}.items():
+        fallback_used = any(item.available for item in source_rows) and any(not item.available for item in source_rows)
+        for item in source_rows:
+            http = re.search(r"HTTP(?: Error)?\s+(\d{3})", item.error or "", re.IGNORECASE)
+            attempted = item.last_attempt_at or now
+            for capability in PROVIDER_CAPABILITIES.get(item.name, ("SCHEDULE",)):
+                health = ProviderHealth(item.name, sport, capability,
+                    "ACTIVE" if item.available else ("CREDENTIAL_REQUIRED" if "not configured" in (item.error or "") else "ERROR"),
+                    attempted, item.last_success_at or (now if item.available else None),
+                    int(http.group(1)) if http else None, item.latency_ms, len(item.matches),
+                    None if item.available else type(item.error).__name__, item.error,
+                    0 if item.available else None)
+                row = health.as_dict(); row["fallback_used"] = bool(fallback_used and not item.available)
+                provider_health[f"{sport}:{item.name}:{capability}"] = row
+    provider_store = ProviderHealthStore(os.getenv("PROVIDER_HEALTH_DB_PATH", paper_db))
+    provider_store.record(list(provider_health.values()), now)
     report = {
         "report_date": report_day.isoformat(), "generated_at": now.isoformat(),
         "bankroll_usdc": bankroll, "recommendations": recommendations, "sport_status": statuses,
         "schedule_coverage": audits,
+        "coverage_report": coverage.as_dict(),
+        "match_lifecycle": lifecycle_rows,
+        "prematch_scan_missed": sum(int(row["prematch_scan_missed"]) for row in lifecycle_rows),
         "today_scheduled_matches": sum(len(rows) for rows in audit_matches.values()),
         "data_incomplete": any(audit["data_incomplete"] for audit in audits.values()),
         "flagged": flagged,
@@ -776,6 +1177,11 @@ def run_all(model_dir: str | Path, output: str | Path, *, now: datetime | None =
         "virtual_betting": virtual_betting,
         "risk_notes": risk_notes,
         "model_staleness": model_staleness,
+        "data_health": data_health,
+        "provider_health": provider_health,
+        "provider_health_daily": provider_store.daily_summary(report_day.isoformat()),
+        "prematch_scan_daily": lifecycle_store.daily_metrics(report_day.isoformat()),
+        "system_health": system_health,
         "risk_status": {
             "bankroll_usdc": bankroll,
             "max_bet_fraction": risk_config.max_bet_fraction,

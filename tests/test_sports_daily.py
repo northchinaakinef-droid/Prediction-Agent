@@ -89,7 +89,7 @@ class SportsDailyTests(unittest.TestCase):
 
     def test_paper_trading_enabled_allows_virtual_bet_without_probability_approval(self):
         now = datetime(2026, 1, 1, 12, tzinfo=timezone.utc)
-        market = {"liquidity": 1000, "spread": .01, "bestBid": .60, "bestAsk": .60}
+        market = {"volume": 10000, "liquidity": 1000, "spread": .01, "bestBid": .60, "bestAsk": .60}
         with patch.dict(os.environ, {"PAPER_TRADING_ENABLED": "true"}):
             row = _research_row(
                 "cs2", {"id": "e1", "title": "A vs B"}, market,
@@ -99,10 +99,28 @@ class SportsDailyTests(unittest.TestCase):
         self.assertEqual(row["action"], "BET")
         self.assertFalse(row["real_money_approved"])
         self.assertGreater(float(row["stake"]), 0)
+        self.assertTrue(row["market_quality_qualified"])
+        self.assertTrue(row["daily_candidate"])
+
+    def test_daily_candidate_rejects_low_volume_even_with_positive_ev(self):
+        now = datetime(2026, 1, 1, 12, tzinfo=timezone.utc)
+        market = {"volume": 50, "liquidity": 1000, "spread": .01, "bestBid": .60, "bestAsk": .60}
+        with patch.dict(os.environ, {
+            "PAPER_TRADING_ENABLED": "true", "MIN_DAILY_MARKET_VOLUME": "1000",
+        }):
+            row = _research_row(
+                "cs2", {"id": "e1", "title": "A vs B"}, market,
+                now + timedelta(hours=1), ["A", "B"], [.60, .40], [.80, .20],
+                probability_ok=False, money_ok=False, now=now, bankroll=1000, reasons=[],
+            )
+        self.assertEqual(row["action"], "NO_BET")
+        self.assertFalse(row["market_quality_qualified"])
+        self.assertFalse(row["daily_candidate"])
+        self.assertTrue(any("market volume below daily threshold" in reason for reason in row["reasons"]))
 
     def test_paper_trading_disabled_keeps_no_bet_without_probability_approval(self):
         now = datetime(2026, 1, 1, 12, tzinfo=timezone.utc)
-        market = {"liquidity": 1000, "spread": .01, "bestBid": .60, "bestAsk": .60}
+        market = {"volume": 10000, "liquidity": 1000, "spread": .01, "bestBid": .60, "bestAsk": .60}
         with patch.dict(os.environ, {"PAPER_TRADING_ENABLED": "false"}):
             row = _research_row(
                 "cs2", {"id": "e1", "title": "A vs B"}, market,

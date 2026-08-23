@@ -7,7 +7,7 @@ import json
 import os
 import re
 from dataclasses import asdict, dataclass, field
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Callable, Iterable
@@ -19,12 +19,28 @@ from .entities import canonical_team, normalized_name
 
 REPORT_ZONE = "Asia/Singapore"
 TARGET_LOL_LEAGUES = ("LPL", "LCK", "LEC", "LCS", "LTA", "LCP", "MSI", "WORLDS", "FIRST STAND")
+BROWSER_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+)
 
 
 def _fetch_text(url: str, timeout: float = 30) -> str:
     request = Request(url, headers={"Accept": "text/html", "User-Agent": "PredictionAgent/0.1 schedule-audit"})
     with urlopen(request, timeout=timeout) as response:
         return response.read().decode("utf-8")
+
+
+def _fetch_json(url: str, *, params: dict | None = None,
+                headers: dict | None = None, timeout: float = 20) -> object:
+    from urllib.parse import urlencode
+    if params:
+        url = f"{url}?{urlencode(params)}"
+    req_headers = {"Accept": "application/json", "User-Agent": BROWSER_UA}
+    req_headers.update(headers or {})
+    request = Request(url, headers=req_headers)
+    with urlopen(request, timeout=timeout) as response:
+        return json.loads(response.read().decode("utf-8"))
 
 
 def _clean(value: str) -> str:
@@ -75,6 +91,15 @@ class SourceResult:
     available: bool
     matches: list[CanonicalMatch]
     error: str | None = None
+    latency_ms: int | None = None
+    last_attempt_at: datetime | None = None
+    last_success_at: datetime | None = None
+
+    def as_dict(self) -> dict:
+        row = asdict(self); row["matches"] = len(self.matches)
+        row["last_attempt_at"] = self.last_attempt_at.isoformat() if self.last_attempt_at else None
+        row["last_success_at"] = self.last_success_at.isoformat() if self.last_success_at else None
+        return row
 
 
 def make_match(*, source: str, league: str, team_a: str, team_b: str,
@@ -138,6 +163,155 @@ def parse_esportagenda(html_text: str, report_day: date, zone: ZoneInfo) -> list
     return matches
 
 
+def _lol_target_names() -> tuple[str, ...]:
+    configured = os.getenv("LOL_TARGET_LEAGUES")
+    if configured is None:
+        return tuple(value.casefold() for value in TARGET_LOL_LEAGUES)
+    return tuple(value.strip().casefold() for value in configured.split(",") if value.strip())
+
+
+def parse_leaguepedia_schedule(report_day: date, zone: ZoneInfo) -> list[CanonicalMatch]:
+    local_start = datetime.combine(report_day, datetime.min.time(), zone) - timedelta(hours=2)
+    local_end = datetime.combine(report_day + timedelta(days=1), datetime.min.time(), zone) + timedelta(hours=2)
+    utc_start = local_start.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    utc_end = local_end.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    payload = _fetch_json("https://lol.fandom.com/api.php", params={
+        "action": "cargoquery", "format": "json", "limit": 200,
+        "tables": "MatchSchedule=MS",
+        "fields": "MS.Team1,MS.Team2,MS.DateTime_UTC,MS.BestOf,MS.OverviewPage",
+        "where": f"MS.DateTime_UTC >= '{utc_start}' AND MS.DateTime_UTC <= '{utc_end}'",
+        "order_by": "MS.DateTime_UTC ASC",
+    })
+    targets = _lol_target_names()
+    matches: list[CanonicalMatch] = []
+    for result in payload.get("cargoquery", []) if isinstance(payload, dict) else []:
+        item = result.get("title", {})
+        overview = str(item.get("OverviewPage") or "")
+        if targets and not any(target in overview.casefold() for target in targets):
+            continue
+        start_text = str(item.get("DateTime UTC") or item.get("DateTime_UTC") or "")
+        try:
+            start = datetime.fromisoformat(start_text.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if start.tzinfo is None:
+            start = start.replace(tzinfo=timezone.utc)
+        if start.astimezone(zone).date() != report_day:
+            continue
+        team_a, team_b = str(item.get("Team1") or "").strip(), str(item.get("Team2") or "").strip()
+        if not team_a or not team_b:
+            continue
+        best_of_text = str(item.get("BestOf") or "")
+        best_of_match = re.search(r"\d+", best_of_text)
+        league = overview.split("/", 1)[0] or "UNKNOWN"
+        matches.append(make_match(
+            source="leaguepedia_sched", league=league, team_a=team_a, team_b=team_b,
+            start_time=start, event_name=overview or league,
+            best_of=int(best_of_match.group()) if best_of_match else None,
+        ))
+    return matches
+
+
+def parse_pandascore_lol_schedule(report_day: date, zone: ZoneInfo) -> list[CanonicalMatch]:
+    token = os.getenv("PANDASCORE_TOKEN")
+    if not token:
+        raise RuntimeError("PANDASCORE_TOKEN not configured")
+    local_start = datetime.combine(report_day, datetime.min.time(), zone) - timedelta(hours=6)
+    local_end = datetime.combine(report_day + timedelta(days=1), datetime.min.time(), zone) + timedelta(hours=6)
+    params = {
+        "token": token, "per_page": 100, "page": 1,
+        "range[begin_at]": (
+            f"{local_start.astimezone(timezone.utc).isoformat()},"
+            f"{local_end.astimezone(timezone.utc).isoformat()}"
+        ),
+    }
+    matches: dict[str, CanonicalMatch] = {}
+    for endpoint in ("running", "upcoming"):
+        payload = _fetch_json(f"https://api.pandascore.co/lol/matches/{endpoint}", params=params)
+        for item in payload if isinstance(payload, list) else []:
+            opponents = [row.get("opponent") for row in item.get("opponents", []) if row.get("opponent")]
+            if len(opponents) != 2 or not item.get("begin_at"):
+                continue
+            start = datetime.fromisoformat(str(item["begin_at"]).replace("Z", "+00:00"))
+            if start.astimezone(zone).date() != report_day:
+                continue
+            league = str(item.get("league", {}).get("name") or "UNKNOWN")
+            event_name = str(item.get("tournament", {}).get("name") or league)
+            match = make_match(
+                source="pandascore_lol_sched", league=league,
+                team_a=str(opponents[0]["name"]), team_b=str(opponents[1]["name"]),
+                start_time=start, event_name=event_name,
+                best_of=int(item.get("number_of_games") or 0) or None,
+                event_status=str(item.get("status") or "SCHEDULED").upper(),
+            )
+            matches[str(item.get("id") or match.match_id)] = match
+    return list(matches.values())
+
+
+def _json_ld_sports_events(value: object) -> Iterable[dict]:
+    if isinstance(value, dict):
+        if value.get("@type") == "SportsEvent":
+            yield value
+        for child in value.values():
+            yield from _json_ld_sports_events(child)
+    elif isinstance(value, list):
+        for child in value:
+            yield from _json_ld_sports_events(child)
+
+
+def parse_zhibo8_lol_schedule(html_text: str, report_day: date, zone: ZoneInfo) -> list[CanonicalMatch]:
+    targets = _lol_target_names()
+    matches: list[CanonicalMatch] = []
+    scripts = re.findall(
+        r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>', html_text, re.I | re.S,
+    )
+    for script in scripts:
+        try:
+            payload = json.loads(html.unescape(script).strip())
+        except (TypeError, ValueError):
+            continue
+        for event in _json_ld_sports_events(payload):
+            name = _clean(str(event.get("name") or ""))
+            split = re.split(r"\s+(?:vs\.?|VS|对阵)\s+", name, maxsplit=1, flags=re.I)
+            league_value = event.get("organizer") or event.get("superEvent") or ""
+            league = str(league_value.get("name") or "") if isinstance(league_value, dict) else str(league_value)
+            if len(split) != 2 or not event.get("startDate"):
+                continue
+            start = datetime.fromisoformat(str(event["startDate"]).replace("Z", "+00:00"))
+            if start.tzinfo is None:
+                start = start.replace(tzinfo=zone)
+            searchable = f"{league} {name}".casefold()
+            if targets and not any(target in searchable for target in targets):
+                continue
+            if start.astimezone(zone).date() == report_day:
+                matches.append(make_match(
+                    source="zhibo8", league=league or name, team_a=split[0], team_b=split[1],
+                    start_time=start, event_name=league or name,
+                ))
+    if matches:
+        return matches
+
+    for row in re.findall(r"<tr\b[^>]*>(.*?)</tr>", html_text, re.I | re.S):
+        text = _clean(row)
+        time_match = re.search(r"\b([01]?\d|2[0-3]):([0-5]\d)\b", text)
+        versus = re.search(r"(.+?)\s+(?:vs\.?|VS|对阵)\s+(.+)", text, re.I)
+        league = next((name for name in TARGET_LOL_LEAGUES if name.casefold() in text.casefold()), None)
+        if not time_match or not versus or not league or (targets and league.casefold() not in targets):
+            continue
+        team_a = re.sub(r"^.*?\b\d{1,2}:\d{2}\b", "", versus.group(1)).strip(" -|:")
+        team_a = re.sub(re.escape(league), "", team_a, flags=re.I).strip(" -|:")
+        team_b = versus.group(2).strip(" -|:")
+        if not team_a or not team_b:
+            continue
+        start = datetime(report_day.year, report_day.month, report_day.day,
+                         int(time_match.group(1)), int(time_match.group(2)), tzinfo=zone)
+        matches.append(make_match(
+            source="zhibo8", league=league, team_a=team_a, team_b=team_b,
+            start_time=start, event_name=league,
+        ))
+    return matches
+
+
 class LolScheduleDiscovery:
     def __init__(self, fetch: Callable[[str], str] = _fetch_text):
         self.fetch = fetch
@@ -168,6 +342,36 @@ class LolScheduleDiscovery:
                 logging.exception("schedule source esportagenda failed for %s", url)
                 errors.append(f"{url}: {error!r}")
         results.append(SourceResult("esportagenda", not errors, secondary, "; ".join(errors) or None))
+
+        try:
+            matches = parse_leaguepedia_schedule(report_day, self.zone)
+            results.append(SourceResult("leaguepedia_sched", True, matches))
+        except Exception as error:
+            logging.exception("schedule source leaguepedia_sched failed")
+            results.append(SourceResult("leaguepedia_sched", False, [], repr(error)))
+
+        try:
+            matches = parse_pandascore_lol_schedule(report_day, self.zone)
+            results.append(SourceResult("pandascore_lol_sched", True, matches))
+        except RuntimeError as error:
+            if str(error) != "PANDASCORE_TOKEN not configured":
+                logging.exception("schedule source pandascore_lol_sched failed")
+            results.append(SourceResult("pandascore_lol_sched", False, [], repr(error)))
+        except Exception as error:
+            logging.exception("schedule source pandascore_lol_sched failed")
+            results.append(SourceResult("pandascore_lol_sched", False, [], repr(error)))
+
+        # The former /esport/lol/schedule endpoint returns HTTP 404 on both
+        # zhibo8.cc and zhibo8.com. Keep the parser for archived fixtures, but
+        # do not call a permanently dead endpoint in production discovery.
+        if os.getenv("ENABLE_DEPRECATED_ZHIBO8_SCHEDULE", "false").casefold() == "true":
+            try:
+                text = self.fetch(os.environ["ZHIBO8_LOL_URL"])
+                matches = parse_zhibo8_lol_schedule(text, report_day, self.zone)
+                results.append(SourceResult("zhibo8", True, matches))
+            except Exception as error:
+                logging.exception("deprecated schedule source zhibo8 failed")
+                results.append(SourceResult("zhibo8", False, [], repr(error)))
         return results
 
 
@@ -357,7 +561,7 @@ def build_schedule_audit(results: list[SourceResult], market_events: list[dict],
     total = len(matches)
     matched = sum(row.market_mapping_status == "MATCHED" for row in matches)
     watching = sum(row.watcher_status in {"WAITING", "LIVE"} for row in matches)
-    unavailable = [asdict(result) | {"matches": len(result.matches)} for result in results if not result.available]
+    unavailable = [result.as_dict() for result in results if not result.available]
     # Multiple healthy schedule sources may safely confirm zero events even when an
     # additional provider is down. One healthy source is discovery, not confirmation.
     insufficient_sources = sum(result.available for result in results) < 2

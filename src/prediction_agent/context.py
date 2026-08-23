@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 from functools import lru_cache
 from pathlib import Path
+from datetime import datetime, timezone
 from typing import Any
 
 from .entities import canonical_team
@@ -30,6 +31,11 @@ def load_recent_form() -> dict[str, dict[str, dict[str, int]]]:
     if not path.exists():
         return {}
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def recent_form_artifact_generated_at() -> str | None:
+    path = ARTIFACT_DIR / "recent_form.json"
+    return datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).isoformat() if path.exists() else None
 
 
 def player_display_names(sport: str, roster: tuple[str, ...] | list[str]) -> list[str]:

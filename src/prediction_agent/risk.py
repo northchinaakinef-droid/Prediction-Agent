@@ -28,6 +28,29 @@ def kelly_fraction(probability: float, decimal_odds: float) -> float:
     return max(0.0, (probability * decimal_odds - 1) / net)
 
 
+def binary_share_math(probability: float, execution_price: float, *,
+                      fee_rate_on_capital: float = 0.0,
+                      slippage_per_share: float = 0.0) -> dict[str, float]:
+    """Canonical economics for buying one binary YES share.
+
+    Absolute edge/profit is denominated per share. ROI is profit divided by
+    capital paid and is deliberately a separate field.
+    """
+    if not 0 <= probability <= 1 or not 0 < execution_price < 1:
+        raise ValueError("probability must be [0,1] and execution price must be (0,1)")
+    if fee_rate_on_capital < 0 or slippage_per_share < 0:
+        raise ValueError("costs must be non-negative")
+    decimal_odds = 1 / execution_price
+    gross_profit_per_share = probability - execution_price
+    fee_per_share = execution_price * fee_rate_on_capital
+    expected_profit_per_share = gross_profit_per_share - fee_per_share - slippage_per_share
+    return {"execution_price": execution_price, "decimal_odds": decimal_odds,
+            "executable_edge": gross_profit_per_share,
+            "fee_per_share": fee_per_share, "slippage_per_share": slippage_per_share,
+            "expected_profit_per_share": expected_profit_per_share,
+            "expected_roi_on_capital": expected_profit_per_share / execution_price}
+
+
 @dataclass(frozen=True)
 class RiskConfig:
     """Environment-wired risk limits with the legacy hardcoded values as defaults.
@@ -159,6 +182,14 @@ class RiskBudgetLedger:
         self.event_committed[event_id] = self.event_committed.get(event_id, 0.0) + fraction
         if group_key:
             self.group_committed[group_key] = self.group_committed.get(group_key, 0.0) + fraction
+
+    def release(self, event_id: str, group_key: str | None, stake_fraction: float) -> None:
+        """Release a provisional Quant allocation rejected by a later intelligence gate."""
+        fraction = max(0.0, float(stake_fraction))
+        self.daily_committed = max(0.0, self.daily_committed - fraction)
+        self.event_committed[event_id] = max(0.0, self.event_committed.get(event_id, 0.0) - fraction)
+        if group_key:
+            self.group_committed[group_key] = max(0.0, self.group_committed.get(group_key, 0.0) - fraction)
 
 
 def recommend(

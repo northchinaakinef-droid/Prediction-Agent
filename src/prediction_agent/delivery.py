@@ -249,6 +249,14 @@ def format_daily_report(report: dict[str, Any], report_date: date | None = None)
     lines = [f"【今日模拟下注】{len(bets)}场"]
     if report.get("today_scheduled_matches") is not None:
         lines.append(f"【今日赛程】实际场次 {int(report['today_scheduled_matches'])} 场")
+    coverage = report.get("coverage_report") or {}
+    if coverage:
+        lines.append(
+            f"【覆盖审计】今日赛事 {int(coverage.get('total_schedule_events') or 0)}｜"
+            f"成功分析 {int(coverage.get('analyzed_events') or 0)}｜"
+            f"无市场 {int(coverage.get('no_market_events') or 0)}｜"
+            f"数据不足 {int(coverage.get('data_incomplete_events') or 0)}"
+        )
     separator = "━━━━━━━━━━━━━━━━"
     if bets:
         lines.append(separator)
@@ -261,10 +269,24 @@ def format_daily_report(report: dict[str, Any], report_date: date | None = None)
             lines.append(f"[{index}]{status_label} {event} | {outcome} | {stake:.2f} USDC")
             lines.append(
                 f"    EV: {percent(row.get('expected_value'))} | "
-                f"模型: {percent(row.get('model_probability'))} vs 市场: {percent(row.get('market_probability'))}"
+                f"模型: {percent(row.get('model_probability'))} vs 市场公平概率: "
+                f"{percent(row.get('market_fair_probability', row.get('market_probability')))} | "
+                f"成交价: {percent(row.get('execution_price'))}"
+            )
+            lines.append(
+                f"    市场质量: 成交量 {float(row.get('market_volume') or 0):,.0f} USDC | "
+                f"流动性 {float(row.get('market_liquidity') or 0):,.0f} USDC | 已通过筛选"
+            )
+            missing = row.get("data_quality_missing") or []
+            lines.append(
+                f"    数据质量: {row.get('data_quality_level') or 'UNKNOWN'} | "
+                f"状态: {row.get('recommendation_state') or row.get('action') or 'WATCH'} | "
+                f"缺失: {', '.join(str(value) for value in missing) if missing else '无'}"
             )
             lines.append(f"    阵容状态: {row.get('lineup_status') or '未知'} | "
                          f"下注状态: {row.get('bet_status') or '跳过'}")
+            if str(row.get("lineup_status") or "").upper() == "HISTORICAL":
+                lines.append("    首发未确认，当前采用历史/预期阵容。")
             lines.append(separator)
 
     if skipped_rows:
@@ -279,13 +301,23 @@ def format_daily_report(report: dict[str, Any], report_date: date | None = None)
                 continue
             ev = percent(row.get("expected_value"))
             model = percent(row.get("model_probability"))
-            market = percent(row.get("market_probability"))
+            market = percent(row.get("market_fair_probability", row.get("market_probability")))
             reasons = _key_reasons(row, limit=3)
             reason_text = "；".join(reasons) if reasons else "无明确拒绝原因"
-            lines.append(f"    EV: {ev} | 模型: {model} vs 市场: {market}")
+            lines.append(f"    EV: {ev} (ROI on capital) | 模型: {model} vs 市场公平概率: {market} | "
+                         f"成交价: {percent(row.get('execution_price'))}")
+            lines.append(
+                f"    成交量: {float(row.get('market_volume') or 0):,.0f} USDC | "
+                f"流动性: {float(row.get('market_liquidity') or 0):,.0f} USDC"
+            )
+            missing = row.get("data_quality_missing") or []
+            if missing:
+                lines.append(f"    数据缺失: {', '.join(str(value) for value in missing)}")
             lines.append(f"    阵容: {row.get('lineup_status') or '未知'} | "
                          f"赛程匹配: {row.get('market_mapping_status') or 'NOT_IN_SCHEDULE'} | "
                          f"卡住条件: {reason_text}")
+            if str(row.get("lineup_status") or "").upper() == "HISTORICAL":
+                lines.append("    首发未确认，当前采用历史/预期阵容。")
 
     bankroll = report.get("bankroll_usdc")
     paper_daily = report.get("paper_daily") or {}
@@ -326,6 +358,17 @@ def format_daily_report(report: dict[str, Any], report_date: date | None = None)
                 f"【虚拟进度】已完成{v_count}场 | 虚拟ROI: {v_roi_text} | "
                 f"当前状态: {advice_status} | 虚拟余额: {v_balance_text}"
             )
+    health = report.get("system_health") or {}
+    if health:
+        models = health.get("models") or {}
+        data = health.get("data") or {}
+        notifications = health.get("notifications") or {}
+        lines.append(
+            "【系统健康】模型 " + "/".join(f"{key.upper()} {value}" for key, value in models.items())
+            + f"｜CS2近期状态 {data.get('cs2_recent_form', 'UNKNOWN')}"
+            + f"｜通知待发 {int(notifications.get('PENDING') or 0)} 失败 {int(notifications.get('FAILED') or 0)}"
+            + f"｜LLM {(health.get('llm') or {}).get('status', 'UNKNOWN')}"
+        )
     lines.append(f"【风控状态】{risk_status_text()}")
     return "\n".join(lines).strip()
 
