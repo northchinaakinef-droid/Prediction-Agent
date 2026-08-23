@@ -2,11 +2,13 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
+from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
 from prediction_agent.schedule import (
-    SourceResult, build_schedule_audit, detect_source_mismatches, make_match, match_markets,
-    parse_esportagenda, parse_nextmatch, reconcile_sources,
+    LolScheduleDiscovery, SourceResult, build_schedule_audit, detect_source_mismatches, make_match,
+    match_markets, parse_esportagenda, parse_leaguepedia_schedule, parse_nextmatch,
+    parse_pandascore_lol_schedule, parse_zhibo8_lol_schedule, reconcile_sources,
 )
 
 
@@ -118,6 +120,99 @@ class ScheduleTests(unittest.TestCase):
         mismatches = detect_source_mismatches([SourceResult("a", True, [a]), SourceResult("b", True, [b])])
         self.assertEqual(len(mismatches), 1)
         self.assertIn("cross-referenced sources disagree on start time", mismatches[0]["reason"])
+
+
+class LolBackupSourceTests(unittest.TestCase):
+    zone = ZoneInfo("Asia/Singapore")
+    day = date(2026, 8, 14)
+
+    @patch("prediction_agent.schedule._fetch_json")
+    def test_leaguepedia_schedule_filters_day_and_target_league(self, fetch_json):
+        fetch_json.return_value = {"cargoquery": [
+            {"title": {"Team1": "T1", "Team2": "DK", "DateTime_UTC": "2026-08-14 08:00:00",
+                       "BestOf": "3", "OverviewPage": "LCK/2026 Season"}},
+            {"title": {"Team1": "Old", "Team2": "Match", "DateTime_UTC": "2026-08-13 08:00:00",
+                       "BestOf": "3", "OverviewPage": "LCK/2026 Season"}},
+            {"title": {"Team1": "Minor", "Team2": "League", "DateTime_UTC": "2026-08-14 09:00:00",
+                       "BestOf": "3", "OverviewPage": "NACL/2026 Season"}},
+        ]}
+        with patch.dict("os.environ", {"LOL_TARGET_LEAGUES": "LCK,LPL"}):
+            rows = parse_leaguepedia_schedule(self.day, self.zone)
+        self.assertEqual(len(rows), 1)
+        self.assertIn("leaguepedia_sched", rows[0].sources)
+        self.assertEqual(rows[0].league, "LCK")
+        self.assertEqual(fetch_json.call_args.kwargs["params"]["tables"], "MatchSchedule=MS")
+
+    def test_pandascore_schedule_requires_token(self):
+        with patch.dict("os.environ", {}, clear=True):
+            with self.assertRaisesRegex(RuntimeError, "PANDASCORE_TOKEN not configured"):
+                parse_pandascore_lol_schedule(self.day, self.zone)
+
+    @patch("prediction_agent.schedule._fetch_json")
+    def test_pandascore_schedule_parses_upcoming_response(self, fetch_json):
+        fetch_json.side_effect = [[], [{
+            "id": 42, "begin_at": "2026-08-14T08:00:00Z", "status": "not_started",
+            "number_of_games": 3, "league": {"name": "LCK"},
+            "tournament": {"name": "LCK Summer"},
+            "opponents": [
+                {"opponent": {"id": 1, "name": "T1"}},
+                {"opponent": {"id": 2, "name": "DK"}},
+            ],
+        }]]
+        with patch.dict("os.environ", {"PANDASCORE_TOKEN": "test-token"}):
+            rows = parse_pandascore_lol_schedule(self.day, self.zone)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0].best_of, 3)
+        self.assertIn("pandascore_lol_sched", rows[0].sources)
+        self.assertTrue(fetch_json.call_args.args[0].endswith("/upcoming"))
+
+    def test_zhibo8_parses_json_ld(self):
+        page = '''<script type="application/ld+json">{
+          "@type":"SportsEvent", "name":"T1 vs DK", "startDate":"2026-08-14T16:00:00+08:00",
+          "organizer":{"@type":"Organization", "name":"LCK"}
+        }</script>'''
+        rows = parse_zhibo8_lol_schedule(page, self.day, self.zone)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0].team_b, "Dplus KIA")
+        self.assertIn("zhibo8", rows[0].sources)
+
+    def test_zhibo8_parses_table_fallback(self):
+        page = "<table><tr><td>16:00</td><td>LPL</td><td>NIP vs LNG</td></tr></table>"
+        rows = parse_zhibo8_lol_schedule(page, self.day, self.zone)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual({rows[0].team_a, rows[0].team_b}, {"Ninjas in Pyjamas", "LNG Esports"})
+
+    @patch("prediction_agent.schedule.parse_zhibo8_lol_schedule", return_value=[])
+    @patch("prediction_agent.schedule.parse_pandascore_lol_schedule", return_value=[])
+    @patch("prediction_agent.schedule.parse_leaguepedia_schedule", return_value=[])
+    def test_discover_returns_five_named_sources(self, _leaguepedia, _pandascore, _zhibo8):
+        discovery = LolScheduleDiscovery(fetch=lambda _url: "")
+        results = discovery.discover(self.day)
+        self.assertEqual(
+            [result.name for result in results],
+            ["nextmatch", "esportagenda", "leaguepedia_sched", "pandascore_lol_sched"],
+        )
+
+    @patch("prediction_agent.schedule.parse_zhibo8_lol_schedule", return_value=[])
+    @patch("prediction_agent.schedule.parse_leaguepedia_schedule", return_value=[])
+    def test_discover_marks_missing_pandascore_token_unavailable(self, _leaguepedia, _zhibo8):
+        with patch.dict("os.environ", {}, clear=True):
+            results = LolScheduleDiscovery(fetch=lambda _url: "").discover(self.day)
+        pandascore = next(result for result in results if result.name == "pandascore_lol_sched")
+        self.assertFalse(pandascore.available)
+        self.assertIn("PANDASCORE_TOKEN not configured", pandascore.error)
+
+    @patch("prediction_agent.schedule.parse_pandascore_lol_schedule", return_value=[])
+    @patch("prediction_agent.schedule.parse_leaguepedia_schedule", return_value=[])
+    def test_zhibo8_failure_does_not_affect_other_sources(self, _leaguepedia, _pandascore):
+        def fetch(url):
+            if "zhibo8" in url:
+                raise TimeoutError("zhibo8 timeout")
+            return ""
+
+        results = LolScheduleDiscovery(fetch=fetch).discover(self.day)
+        self.assertEqual(len(results), 4)
+        self.assertTrue(all(result.available for result in results))
 
 
 if __name__ == "__main__":

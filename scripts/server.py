@@ -15,6 +15,7 @@ from prediction_agent.delivery import (
     format_live_alert, format_paper_betting_summary,
 )
 from prediction_agent.live_runtime import LiveSupervisor
+from prediction_agent.notifications import AlertCategory, NotificationOutbox, OutboxMessage, OutboxWorker
 from prediction_agent.sports_daily import run_all
 from prediction_agent.paper_store import (
     attribution, mark_paper_summary_sent, mark_weekly_attribution_sent,
@@ -67,6 +68,24 @@ def _send_message(message: str) -> None:
                     os.getenv("FEISHU_RECEIVE_ID_TYPE", "open_id")).send_text(message)
 
 
+def _notification_outbox() -> NotificationOutbox:
+    path = os.getenv("NOTIFICATION_DB_PATH", str(ROOT / "data" / "daily" / "notifications.db"))
+    return NotificationOutbox(path)
+
+
+def _deliver_outbox_message(message: OutboxMessage) -> None:
+    if message.category == AlertCategory.DAILY_REPORT.value:
+        _send(message.payload)
+    else:
+        _send_message(str(message.payload.get("message") or ""))
+
+
+def _flush_outbox() -> dict[str, int]:
+    result = OutboxWorker(_notification_outbox(), _deliver_outbox_message).run_once()
+    STATE["notifications"] = _notification_outbox().status_counts()
+    return result
+
+
 def run_once(*, notify: bool = True) -> None:
     with RUN_LOCK:
         STATE["last_run"] = datetime.now(timezone.utc).isoformat()
@@ -84,8 +103,10 @@ def run_once(*, notify: bool = True) -> None:
             STATE["model_staleness"] = report.get("model_staleness")
             STATE["last_scan"] = datetime.now(timezone.utc).isoformat()
             if notify:
-                _send(report)
-                STATE["last_push"] = datetime.now(timezone.utc).isoformat()
+                _notification_outbox().enqueue_daily(str(report["report_date"]), report)
+                delivery = _flush_outbox()
+                if delivery["sent"]:
+                    STATE["last_push"] = datetime.now(timezone.utc).isoformat()
             STATE.update(last_ok=datetime.now(timezone.utc).isoformat(), error=None)
         except Exception as error:
             STATE["error"] = repr(error)
@@ -176,6 +197,10 @@ def scheduler() -> None:
                             (next_summary - now).total_seconds()))
         time.sleep(min(wait, 60))
         current = datetime.now(timezone.utc)
+        try:
+            _flush_outbox()
+        except Exception as error:
+            STATE["notification_error"] = repr(error)
         if current >= next_daily - timedelta(seconds=1):
             try:
                 run_once()
@@ -189,6 +214,7 @@ def scheduler() -> None:
 
 
 def paper_scheduler() -> None:
+    """Full-day heartbeat: reconciliation and aggregate health, not late-news capture."""
     minutes = max(5, int(os.getenv("PAPER_SCAN_MINUTES", "30")))
     while True:
         try:
@@ -196,6 +222,21 @@ def paper_scheduler() -> None:
         except Exception:
             pass
         time.sleep(minutes * 60)
+
+
+def prematch_scheduler() -> None:
+    """Event-aware refresh path for roster, injury, evidence and market changes."""
+    seconds = max(60, int(os.getenv("PREMATCH_SCAN_SECONDS", "300")))
+    while True:
+        started = time.monotonic()
+        try:
+            run_once(notify=False)
+            STATE["prematch_scanner"] = {"last_ok": datetime.now(timezone.utc).isoformat(),
+                                          "interval_seconds": seconds, "error": None}
+        except Exception as error:
+            STATE["prematch_scanner"] = {"last_ok": None, "interval_seconds": seconds,
+                                          "error": repr(error)}
+        time.sleep(max(1.0, seconds - (time.monotonic() - started)))
 
 
 def weekly_attribution_scheduler() -> None:
@@ -211,24 +252,21 @@ def weekly_attribution_scheduler() -> None:
                 pass
 
 
-ALLOWED_LIVE_ALERT_CATEGORIES = {"PREMATCH_ANALYSIS", "DRAFT_ANALYSIS", "POSTMATCH_REVIEW"}
-_SENT_LIVE_ALERT_KEYS: set[str] = set()
-
-
 def _send_valuable_alert(alert) -> None:
     category = getattr(alert, "category", None)
     if category is None and isinstance(alert, dict):
         category = alert.get("category")
-    if category not in ALLOWED_LIVE_ALERT_CATEGORIES:
-        return
     dedupe_key = getattr(alert, "dedupe_key", None)
     if dedupe_key is None and isinstance(alert, dict):
         dedupe_key = alert.get("dedupe_key")
-    if dedupe_key and dedupe_key in _SENT_LIVE_ALERT_KEYS:
-        return
-    _send_message(format_live_alert(alert))
-    if dedupe_key:
-        _SENT_LIVE_ALERT_KEYS.add(dedupe_key)
+    payload = alert.as_dict() if hasattr(alert, "as_dict") else dict(alert)
+    stable_key = str(dedupe_key or f"{payload.get('match_key') or payload.get('title')}:{category}:{payload.get('observed_at')}")
+    _notification_outbox().enqueue(
+        event_id=str(payload.get("match_key") or payload.get("title") or stable_key),
+        match_id=payload.get("match_key"), category=str(category or AlertCategory.MAJOR_EVENT.value),
+        payload={"message": format_live_alert(alert), "alert": payload}, dedupe_key=stable_key,
+    )
+    _flush_outbox()
 
 
 def live_scheduler() -> None:
@@ -238,6 +276,7 @@ def live_scheduler() -> None:
         scan_started = time.monotonic()
         try:
             result = supervisor.scan_once()
+            _flush_outbox()
             STATE["live"] = result
             STATE["live_error"] = None
         except Exception as error:
@@ -325,6 +364,7 @@ class Health(BaseHTTPRequestHandler):
 def main() -> None:
     threading.Thread(target=scheduler, daemon=True).start()
     threading.Thread(target=paper_scheduler, daemon=True).start()
+    threading.Thread(target=prematch_scheduler, daemon=True).start()
     threading.Thread(target=weekly_attribution_scheduler, daemon=True).start()
     threading.Thread(target=live_scheduler, daemon=True).start()
     ThreadingHTTPServer(("0.0.0.0", int(os.getenv("PORT", "8080"))), Health).serve_forever()

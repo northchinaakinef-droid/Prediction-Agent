@@ -1,0 +1,75 @@
+name: Deploy production
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: prediction-agent-production
+  cancel-in-progress: false
+
+jobs:
+  test-and-deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install and test
+        run: |
+          python -m pip install -e . pytest
+          python -m pytest -q
+      - name: Validate production secrets
+        env:
+          PROD_HOST: ${{ secrets.PROD_HOST }}
+          PROD_USER: ${{ secrets.PROD_USER }}
+          PROD_SSH_KEY: ${{ secrets.PROD_SSH_KEY }}
+        run: |
+          test -n "$PROD_HOST"
+          test -n "$PROD_USER"
+          test -n "$PROD_SSH_KEY"
+      - name: Prepare SSH
+        env:
+          PROD_HOST: ${{ secrets.PROD_HOST }}
+          PROD_SSH_KEY: ${{ secrets.PROD_SSH_KEY }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$PROD_SSH_KEY" > ~/.ssh/production_key
+          chmod 600 ~/.ssh/production_key
+          ssh-keyscan -H "$PROD_HOST" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+      - name: Build deployment archive
+        run: |
+          printf '%s\n' "$GITHUB_SHA" > RELEASE_GIT_SHA
+          tar \
+            --exclude='.git' \
+            --exclude='.env' \
+            --exclude='data' \
+            --exclude='reports/daily.json' \
+            --exclude='.pytest_cache' \
+            --exclude='__pycache__' \
+            -czf /tmp/prediction-agent-release.tgz .
+      - name: Upload release
+        env:
+          PROD_HOST: ${{ secrets.PROD_HOST }}
+          PROD_USER: ${{ secrets.PROD_USER }}
+        run: |
+          scp -i ~/.ssh/production_key /tmp/prediction-agent-release.tgz \
+            "$PROD_USER@$PROD_HOST:/tmp/prediction-agent-release.tgz"
+          scp -i ~/.ssh/production_key scripts/activate_release.sh \
+            "$PROD_USER@$PROD_HOST:/tmp/activate_prediction_agent_release.sh"
+      - name: Activate and verify production
+        env:
+          PROD_HOST: ${{ secrets.PROD_HOST }}
+          PROD_USER: ${{ secrets.PROD_USER }}
+        run: |
+          ssh -i ~/.ssh/production_key "$PROD_USER@$PROD_HOST" \
+            'sudo bash /tmp/activate_prediction_agent_release.sh /tmp/prediction-agent-release.tgz'

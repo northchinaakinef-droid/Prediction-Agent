@@ -40,6 +40,7 @@ def _recent_from_results(by_team: dict[str, list[tuple[str, bool]]]) -> dict[str
             "wins": sum(1 for _, won in recent if won),
             "losses": sum(1 for _, won in recent if not won),
             "last_n": len(recent),
+            "latest_match_at": recent[-1][0] if recent else None,
         }
     return out
 
@@ -141,6 +142,10 @@ def main() -> None:
         "lol": _recent_from_lol_csvs(lol_csvs),
         "cs2": _recent_from_cs2_csvs(),
     }
+    if not recent_form["cs2"]:
+        raise RuntimeError(
+            "CS2 recent-form pipeline produced zero teams; provide a supported chronological CS2 match CSV"
+        )
 
     ARTIFACT_DIR.mkdir(parents=True, exist_ok=True)
     (ARTIFACT_DIR / "player_names.json").write_text(

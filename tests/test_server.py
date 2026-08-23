@@ -30,11 +30,13 @@ class ServerDeliveryTests(unittest.TestCase):
         client.send_post.assert_called_once()
         client.send_text.assert_called_once_with("实时告警")
 
-    def test_live_push_filters_to_valuable_categories_only(self):
+    def test_live_push_routes_all_categories_through_outbox(self):
         server = load_server_module()
-        with patch.object(server, "_send_message") as send:
-            server._send_valuable_alert({"category": "WATCHER_MISSING"})
-            send.assert_not_called()
+        with tempfile.TemporaryDirectory() as directory, patch.dict(
+            os.environ, {"NOTIFICATION_DB_PATH": str(Path(directory) / "notifications.db")}, clear=False,
+        ), patch.object(server, "_send_message") as send:
+            server._send_valuable_alert({"category": "WATCHER_MISSING", "dedupe_key": "watcher:1"})
+            send.assert_called_once()
         prematch = {
             "category": "PREMATCH_ANALYSIS", "severity": "IMPORTANT", "alert_score": 55,
             "sport": "lol", "title": "BLG vs WE", "summary": "赛前方向：BLG",
@@ -45,7 +47,9 @@ class ServerDeliveryTests(unittest.TestCase):
                 "reasons": ["队伍底蕴优势"], "analyst_count": 2,
             },
         }
-        with patch.object(server, "_send_message") as send:
+        with tempfile.TemporaryDirectory() as directory, patch.dict(
+            os.environ, {"NOTIFICATION_DB_PATH": str(Path(directory) / "notifications.db")}, clear=False,
+        ), patch.object(server, "_send_message") as send:
             server._send_valuable_alert(prematch)
             send.assert_called_once()
 
@@ -68,7 +72,6 @@ class ServerDeliveryTests(unittest.TestCase):
 
     def test_live_push_dedupes_repeated_alert_keys(self):
         server = load_server_module()
-        server._SENT_LIVE_ALERT_KEYS.clear()
         alert = {
             "category": "PREMATCH_ANALYSIS", "severity": "IMPORTANT", "alert_score": 55,
             "sport": "lol", "title": "BLG vs WE", "summary": "赛前方向：BLG",
@@ -80,7 +83,9 @@ class ServerDeliveryTests(unittest.TestCase):
                 "reasons": ["队伍底蕴优势"], "analyst_count": 2,
             },
         }
-        with patch.object(server, "_send_message") as send:
+        with tempfile.TemporaryDirectory() as directory, patch.dict(
+            os.environ, {"NOTIFICATION_DB_PATH": str(Path(directory) / "notifications.db")}, clear=False,
+        ), patch.object(server, "_send_message") as send:
             server._send_valuable_alert(alert)
             server._send_valuable_alert(alert)
         send.assert_called_once()

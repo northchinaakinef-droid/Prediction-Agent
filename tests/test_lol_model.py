@@ -60,7 +60,7 @@ class LolModelTests(unittest.TestCase):
             "markets": [{
                 "question": "LoL: A vs B (BO3) - Test", "outcomes": '["A","B"]',
                 "outcomePrices": '["0.60","0.40"]', "bestBid": .59, "bestAsk": .61,
-                "spread": .02, "liquidity": "5000",
+                "spread": .02, "liquidity": "5000", "volume": "10000",
             }],
         }
         report = build_lol_report(model, {"approved_for_probability_use": True}, [event],
@@ -78,7 +78,7 @@ class LolModelTests(unittest.TestCase):
             "question": "Celtics vs Lakers", "sportsMarketType": "moneyline",
             "gameStartTime": "2026-08-13T10:00:00Z", "outcomes": '["Celtics","Lakers"]',
             "outcomePrices": '["0.60","0.40"]', "bestBid": .59, "bestAsk": .61,
-            "spread": .02, "liquidity": "5000",
+            "spread": .02, "liquidity": "5000", "volume": "10000",
         }]}
         rows = analyze_sport("nba", model, {"approved_for_probability_use": True}, [event],
                              now=datetime(2026, 8, 13, 0, tzinfo=timezone.utc), bankroll=1000)

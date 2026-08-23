@@ -76,7 +76,7 @@ curl http://127.0.0.1:8080/health
 
 `compose.yaml` 把模型以只读方式挂载，报告和数据使用持久卷。容器异常退出后自动重启，并限制日志大小。生产调度仍由腾讯云容器负责；GitHub Actions 只在 `main` 更新后运行测试并部署新版本，不承担每天的比赛扫描。
 
-云端开发通过私有 GitHub 仓库和 Codex Cloud 完成。所有修改先进入分支和 PR；合并到 `main` 后，`Deploy production` 工作流才会通过受限 SSH 密钥更新腾讯云。部署保留服务器上的 `.env`、`data/` 和前向纸面账本。GitHub `production` 环境需要配置 `DEPLOY_HOST`、`DEPLOY_USER`、`DEPLOY_SSH_KEY` 和 `DEPLOY_HOST_KEY` 四个 secrets。
+云端开发通过私有 GitHub 仓库和 Codex Cloud 完成。所有修改先进入分支和 PR；合并到 `main` 后，`.github/workflows/deploy-production.yml` 才会通过受限 SSH 密钥更新腾讯云。部署保留服务器上的 `.env`、`data/` 和前向纸面账本。GitHub `production` 环境需要配置 `PROD_HOST`、`PROD_USER` 和 `PROD_SSH_KEY` 三个 secrets。生产激活会先备份旧代码、环境文件、SQLite 和容器镜像；新容器健康验证失败时恢复旧镜像。
 
 服务器默认每 30 分钟静默扫描未来 30 小时赛事，把完整快照写入 `data/daily/paper.db`；飞书仍在每天设定时间汇总推送。账本是追加式 SQLite：保存生成时间、距开赛小时数、T−24h/T−6h/T−1h 最近窗口、比赛、模型概率、市场价格、执行价、阵容资格、拒绝理由和动作；相同运行重试不会重复写入。查看累计前向样本：
 
