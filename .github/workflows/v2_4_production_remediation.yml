@@ -44,6 +44,8 @@ jobs:
           import json
           import os
           import sqlite3
+          import urllib.error
+          import urllib.request
           from datetime import datetime, timezone
           from pathlib import Path
 
@@ -92,6 +94,18 @@ jobs:
           cs2_csvs = sorted({str(path.relative_to(external)) for pattern in ('**/*cs2*.csv', '**/*CS2*.csv',
                               'valve_cs2_vrs/**/*.csv') for path in external.glob(pattern) if path.is_file()}) \
               if external.exists() else []
+          try:
+              response = urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=5)
+              health_http = response.status
+              runtime_health = json.load(response)
+          except urllib.error.HTTPError as error:
+              health_http = error.code
+              runtime_health = json.loads(error.read().decode('utf-8'))
+          from prediction_agent.context import lol_roster_health
+          live = runtime_health.get('live') or {}
+          unavailable_sources = sorted(name for name, value in (live.get('source_status') or {}).items()
+                                       if not (value or {}).get('available'))
+          prematch = runtime_health.get('prematch_scanner') or {}
           result = {
               'flags': {name: os.getenv(name, 'UNSET').lower() for name in (
                   'REAL_TRADING_DISABLED', 'LLM_SHADOW_MODE', 'PROVIDER_INGESTION_SHADOW')},
@@ -103,6 +117,14 @@ jobs:
               'reported_cs2_health': data_health.get('cs2_recent_form', 'UNKNOWN'),
               'reported_cs2_detail': data_health.get('cs2_recent_form_detail') or {},
               'reported_lol_roster_health': data_health.get('lol_roster', 'UNKNOWN'),
+              'direct_lol_roster_health': lol_roster_health(),
+              'runtime_health': {
+                  'http_status': health_http,
+                  'prematch_last_ok': bool(prematch.get('last_ok')),
+                  'prematch_error_type': str(prematch.get('error') or '').split('(', 1)[0] or None,
+                  'live_error_type': str(runtime_health.get('live_error') or '').split('(', 1)[0] or None,
+                  'unavailable_sources': unavailable_sources,
+              },
               'report_generated_at': report.get('generated_at'),
           }
           print(json.dumps(result, ensure_ascii=False, sort_keys=True))
@@ -196,6 +218,8 @@ jobs:
               f"- lol_roster.json: `{container['lol_roster_artifact']}`",
               f"- Frozen LoL model roster metadata: `{model}`",
               f"- Reported LoL roster health: `{container['reported_lol_roster_health']}`",
+              f"- Direct LoL roster health: `{container['direct_lol_roster_health']}`",
+              f"- Sanitized runtime health: `{container['runtime_health']}`",
               f"- Container mounts: `{host['mounts']}`",
               f"- Related systemd units: `{host['related_units']}`",
               f"- Sanitized systemd status: `{host['unit_status']}`",
