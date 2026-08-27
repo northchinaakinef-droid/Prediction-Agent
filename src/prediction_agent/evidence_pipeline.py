@@ -133,7 +133,13 @@ def build_match_evidence(row: dict[str, Any], sport: str, match_id: str,
                    "freshness_sla_seconds": freshness_sla(evidence_type)}
         if not unknown:
             payload["value"] = value
-        digest = hashlib.sha256(json.dumps([match_id, evidence_type, payload], sort_keys=True,
+        semantic_identity = {
+            "match_id": match_id, "evidence_type": evidence_type,
+            "availability_state": state, "value": payload.get("value"),
+            "source": "production_normalizer", "published_at": published,
+            "reliability": .85 if not unknown else 0.0,
+        }
+        digest = hashlib.sha256(json.dumps(semantic_identity, sort_keys=True,
                                            default=str).encode()).hexdigest()[:20]
         result.append(Evidence.validate_payload({
             "evidence_id": f"{evidence_type.lower()}:{digest}", "match_id": match_id,

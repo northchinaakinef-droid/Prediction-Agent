@@ -44,6 +44,20 @@ class PredictionSnapshot:
     risk_inputs: dict | None = None
     risk_output: dict | None = None
     created_at: str | None = None
+    ai_status: str = "QUANT_FALLBACK"
+    semantic_evidence_hash: str = ""
+    cache_hit: bool = False
+    decision_window: str | None = None
+    canonical_sample_key: str | None = None
+    final_action: str = "NO_BET"
+    final_stake: float = 0.0
+    quant_action: str = "NO_BET"
+    quant_stake: float = 0.0
+    quant_ev: float | None = None
+    shadow_final_action: str = "NO_BET"
+    shadow_final_stake: float = 0.0
+    shadow_final_ev: float | None = None
+    llm_decision_mode: str = "ACTIVE"
 
 
 @dataclass(frozen=True)
@@ -58,6 +72,22 @@ class PostmatchAttribution:
     feature_failures: tuple[str, ...]
     ai_evidence_failures: tuple[str, ...]
     unexpected_events: tuple[str, ...]
+    quant_brier_score: float | None = None
+    final_brier_score: float | None = None
+    quant_log_loss: float | None = None
+    final_log_loss: float | None = None
+    calibration_delta: float | None = None
+    sport: str | None = None
+    canonical_sample_key: str | None = None
+    quant_action: str | None = None
+    shadow_final_action: str | None = None
+    quant_ev: float | None = None
+    final_ev: float | None = None
+    quant_stake: float = 0.0
+    shadow_final_stake: float = 0.0
+    llm_adjustment: float = 0.0
+    llm_provider: str | None = None
+    llm_model: str | None = None
 
 
 class FeedbackStore:
@@ -99,6 +129,7 @@ class FeedbackStore:
         if snapshot is None:
             raise KeyError(snapshot_id)
         probability = min(.999999, max(.000001, float(snapshot["final_probability"])))
+        baseline = min(.999999, max(.000001, float(snapshot.get("baseline_probability", probability))))
         probability_error = abs(float(outcome) - probability)
         correct = (probability >= .5) == bool(outcome)
         errors = []
@@ -113,6 +144,17 @@ class FeedbackStore:
             (closing_probability - float(snapshot.get("market_fair_probability")))
             if closing_probability is not None and snapshot.get("market_fair_probability") is not None else None,
             feature_failures, ai_failures, unexpected_events,
+            (baseline - outcome) ** 2, (probability - outcome) ** 2,
+            -(outcome * math.log(baseline) + (1 - outcome) * math.log(1 - baseline)),
+            -(outcome * math.log(probability) + (1 - outcome) * math.log(1 - probability)),
+            abs(probability - outcome) - abs(baseline - outcome),
+            (snapshot.get("features_json") or {}).get("sport"),
+            snapshot.get("canonical_sample_key"), snapshot.get("quant_action"),
+            snapshot.get("shadow_final_action"), snapshot.get("quant_ev"),
+            snapshot.get("shadow_final_ev"), float(snapshot.get("quant_stake") or 0),
+            float(snapshot.get("shadow_final_stake") or 0),
+            float(snapshot.get("ai_adjustment") or 0), snapshot.get("llm_provider"),
+            snapshot.get("ai_model_name"),
         )
         with closing(sqlite3.connect(self.path)) as db:
             db.execute(
@@ -121,6 +163,42 @@ class FeedbackStore:
             )
             db.commit()
         return attribution
+
+    def shadow_attribution_summary(self) -> dict:
+        """Aggregate canonical Quant-vs-Final probability quality overall/by sport."""
+        with closing(sqlite3.connect(self.path)) as db:
+            rows = db.execute(
+                "SELECT created_at,payload_json FROM postmatch_attributions ORDER BY created_at"
+            ).fetchall()
+        canonical: dict[str, dict] = {}
+        for _created_at, payload_json in rows:
+            payload = json.loads(payload_json)
+            key = str(payload.get("canonical_sample_key") or payload.get("snapshot_id"))
+            canonical[key] = payload
+
+        def aggregate(items: list[dict]) -> dict:
+            if not items:
+                return {"samples": 0, "quant_brier": None, "final_brier": None,
+                        "quant_log_loss": None, "final_log_loss": None,
+                        "brier_delta": None, "log_loss_delta": None}
+            def mean(field: str) -> float | None:
+                values = [float(item[field]) for item in items if item.get(field) is not None]
+                return sum(values) / len(values) if values else None
+            quant_brier, final_brier = mean("quant_brier_score"), mean("final_brier_score")
+            quant_log, final_log = mean("quant_log_loss"), mean("final_log_loss")
+            return {"samples": len(items), "quant_brier": quant_brier,
+                    "final_brier": final_brier, "quant_log_loss": quant_log,
+                    "final_log_loss": final_log,
+                    "brier_delta": (final_brier - quant_brier)
+                    if final_brier is not None and quant_brier is not None else None,
+                    "log_loss_delta": (final_log - quant_log)
+                    if final_log is not None and quant_log is not None else None,
+                    "quant_bets": sum(item.get("quant_action") == "BET" for item in items),
+                    "shadow_final_bets": sum(item.get("shadow_final_action") == "BET" for item in items)}
+        values = list(canonical.values())
+        by_sport = {sport: aggregate([item for item in values if item.get("sport") == sport])
+                    for sport in ("lol", "cs2", "nba")}
+        return {"overall": aggregate(values), "by_sport": by_sport}
 
 
 @dataclass(frozen=True)

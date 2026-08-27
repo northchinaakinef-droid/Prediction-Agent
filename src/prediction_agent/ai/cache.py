@@ -5,10 +5,47 @@ import json
 import sqlite3
 from contextlib import closing
 from pathlib import Path
+from typing import Iterable
+
+from .schemas import Evidence
 
 
-def cache_key(match_id: str, evidence_hash: str, prompt_version: str) -> str:
-    return hashlib.sha256(f"{match_id}|{evidence_hash}|{prompt_version}".encode()).hexdigest()
+ANALYST_VERSION = "v2.2"
+
+
+def semantic_evidence_fingerprint(evidence: Iterable[Evidence]) -> str:
+    """Hash evidence meaning, not scan-clock metadata.
+
+    Fresh/stale/unknown status is semantic and therefore included.  Volatile
+    observation timestamps and freshness age counters are deliberately omitted.
+    """
+    rows = []
+    for item in evidence:
+        payload = dict(item.payload)
+        rows.append({
+            "evidence_type": item.evidence_type,
+            "status": str(payload.get("status") or "UNKNOWN").upper(),
+            "value": payload.get("value"),
+            "source": item.source,
+            "published_at": item.published_at.isoformat() if item.published_at else None,
+            "reliability_score": item.reliability_score,
+            "freshness_state": "FRESH" if str(payload.get("status") or "").upper() == "AVAILABLE_FRESH"
+                               else "STALE" if str(payload.get("status") or "").upper() == "AVAILABLE_STALE"
+                               else "UNKNOWN",
+        })
+    rows.sort(key=lambda row: (str(row["evidence_type"]), str(row["source"])))
+    return hashlib.sha256(json.dumps(rows, sort_keys=True, ensure_ascii=False,
+                                     default=str).encode()).hexdigest()
+
+
+def cache_key(match_id: str, evidence_hash: str, prompt_version: str,
+              baseline_probability: float | None = None, provider: str = "unknown",
+              model: str = "unknown", analyst_version: str = ANALYST_VERSION) -> str:
+    payload = {"match_id": match_id, "evidence_hash": evidence_hash,
+               "baseline_probability": baseline_probability,
+               "prompt_version": prompt_version, "provider": provider,
+               "model": model, "analyst_version": analyst_version}
+    return hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()
 
 
 class AnalysisCache:

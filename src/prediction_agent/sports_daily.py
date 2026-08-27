@@ -1,5 +1,6 @@
 from __future__ import annotations
 import json
+import copy
 import logging
 import math
 import os
@@ -37,7 +38,7 @@ from .schedule import (
 )
 from .coverage_service import CoverageStore, build_coverage_report
 from .roster import historical_roster
-from .ai.analyst import EvidenceAnalyst
+from .ai.analyst import EvidenceAnalyst, minimum_evidence_gate
 from .ai.cache import AnalysisCache
 from .ai.client import client_from_env
 from .ai.prompts import PROMPT_VERSION
@@ -296,10 +297,25 @@ def _apply_intelligence_gate(row: dict, sport: str) -> None:
         row["decision_gate"] = "PASS"
 
 
+def _apply_post_ai_quality_gates(row: dict, sport: str, model_status: str) -> None:
+    """Apply the unchanged quality gates independently to each candidate."""
+    _attach_data_quality(row, sport, model_status)
+    stale_critical = sorted({kind for kind, state in row.get("evidence_type_status", {}).items()
+                             if state == "AVAILABLE_STALE" and kind in {
+                                 "ROSTER", "RECENT_FORM", "INJURY", "CONFIRMED_STARTERS"}})
+    if stale_critical:
+        row["data_quality_missing"] = sorted(set(row["data_quality_missing"]) |
+                                             {f"STALE_{kind}" for kind in stale_critical})
+        row["data_quality_score"] = max(0.0, row["data_quality_score"] - .1 * len(stale_critical))
+        row["data_quality_level"] = "LOW" if row["data_quality_score"] < .6 else "MEDIUM"
+    _apply_intelligence_gate(row, sport)
+
+
 def _attach_risk_audit(row: dict, bankroll: float, config: RiskConfig) -> None:
     market_price = float(row.get("execution_price") or row.get("market_probability") or 0)
     market_probability = float(row.get("market_probability") or market_price)
-    probability = float(row.get("final_probability") or row.get("model_probability") or .5)
+    probability = float(row.get("execution_decision_probability") or
+                        row.get("final_probability") or row.get("model_probability") or .5)
     raw_edge = probability - market_probability
     quality = float(row.get("data_quality_score") or 0)
     # Signed penalties shrink probability toward the market on either side.
@@ -445,8 +461,6 @@ def analyze_sport(sport: str, model: EloModel | NbaModel, evaluation: dict, even
             )
         market_quality = _daily_market_quality(event, market, risk_config)
         rec = _apply_daily_market_gate(rec, market_quality)
-        if rec.action == "BET":
-            ledger.commit(event_key, group, rec.stake_fraction)
         reasons = (model.explain(team_a, team_b, scheduled)
                    if sport == "nba" and isinstance(model, NbaModel)
                    else model.explain(team_a, team_b))
@@ -535,6 +549,81 @@ def _attach_bet_fields(row: dict, *, model_probability: float | None,
     if virtual_ok and row["real_bet_reason"]:
         row.setdefault("reasons", []).append(row["real_bet_reason"])
     return row
+
+
+def _recompute_post_ai_decision(row: dict, *, final_probability: float,
+                                bankroll: float, config: RiskConfig,
+                                ledger: RiskBudgetLedger, group_key: str) -> float:
+    """Rebuild all executable economics from one candidate probability."""
+    row["final_probability"] = final_probability
+    row["decision_probability"] = final_probability
+    if row.get("market_started") or row.get("execution_price") is None:
+        row.update({"action": "NO_BET", "decision": "NO TRADE", "stake": 0.0,
+                    "stake_fraction": 0.0, "daily_candidate": False})
+        return 0.0
+    event_id = str(row.get("event_id") or row.get("schedule_match_id") or "")
+    price = float(row["execution_price"])
+    cost = max(0.0, float(row.get("estimated_cost_rate") or 0))
+    cap = ledger.cap_for(event_id, group_key)
+    risk_reasons = ledger.exhausted_reasons(event_id, group_key)
+    if _paper_trading_enabled():
+        rec = paper_recommend(
+            event_id=event_id, outcome=str(row.get("outcome") or ""),
+            model_probability=final_probability, decimal_odds=1 / price,
+            bankroll=bankroll, estimated_cost=cost, max_bet_fraction=cap,
+            direction_match=bool(row.get("direction_match")), risk_reasons=risk_reasons,
+        )
+    else:
+        rec = recommend(
+            event_id=event_id, outcome=str(row.get("outcome") or ""),
+            model_probability=final_probability, decimal_odds=1 / price,
+            bankroll=bankroll, confidence=float(row.get("confidence") or 0),
+            spread=row.get("market_spread"), available_size=float(row.get("market_liquidity") or 0),
+            estimated_cost=cost,
+            trading_enabled=_real_trading_enabled() and bool(row.get("probability_eligible")),
+            kelly_scale=config.kelly_scale, max_bet_fraction=cap,
+            min_edge=config.min_edge, min_confidence=config.min_confidence,
+            max_spread=config.max_spread, min_available_size=config.min_available_size,
+            max_depth_fraction=config.max_depth_fraction, risk_reasons=risk_reasons,
+        )
+    if not bool(row.get("market_quality_qualified")):
+        rec = _apply_daily_market_gate(rec, {
+            "qualified": False, "volume": float(row.get("market_volume") or 0),
+            "liquidity": float(row.get("market_liquidity") or 0),
+            "minimum_volume": float(row.get("minimum_market_volume") or 0),
+            "minimum_liquidity": float(row.get("minimum_market_liquidity") or 0),
+        })
+    ev = final_probability / price - 1 - cost
+    row.update({
+        "decision_probability": final_probability,
+        "raw_edge": final_probability - price, "edge": final_probability - price - cost,
+        "expected_value": ev, "action": rec.action, "decision": rec.decision,
+        "stake": rec.stake, "stake_fraction": rec.stake_fraction,
+        "confidence": rec.confidence, "daily_candidate": rec.action == "BET" and ev > 0,
+        "ev_tier": _ev_tier(ev), "post_ai_risk_cap": cap,
+    })
+    row["reasons"] = list(row.get("reasons") or []) + list(rec.reasons)
+    return cap
+
+
+def _select_llm_execution(quant_candidate: dict, final_candidate: dict,
+                          *, shadow_mode: bool, baseline: float) -> dict:
+    """Select one executable candidate and retain the other for attribution."""
+    execution = copy.deepcopy(quant_candidate if shadow_mode else final_candidate)
+    execution.update({
+        "llm_decision_mode": "SHADOW" if shadow_mode else "ACTIVE",
+        "llm_shadow_mode": shadow_mode, "quant_probability": baseline,
+        "quant_action": quant_candidate.get("action"),
+        "quant_stake": float(quant_candidate.get("stake") or 0),
+        "quant_ev": quant_candidate.get("expected_value"),
+        "shadow_final_action": final_candidate.get("action"),
+        "shadow_final_stake": float(final_candidate.get("stake") or 0),
+        "shadow_final_ev": final_candidate.get("expected_value"),
+        "shadow_final_risk_calculation": final_candidate.get("risk_calculation"),
+    })
+    return execution
+
+
 def _patch_meta_context(model, sport: str, roster_a, roster_b) -> tuple[list[str], float | None, float | None]:
     """Derive top patch heroes and each roster's coverage from the frozen model."""
     if sport != "lol" or not hasattr(model, "patch_champion_ratings"):
@@ -623,8 +712,6 @@ def _research_row(sport: str, event: dict, market: dict, scheduled: datetime | N
         )
     market_quality = _daily_market_quality(event, market, risk_config)
     rec = _apply_daily_market_gate(rec, market_quality)
-    if rec.action == "BET":
-        ledger.commit(event_key, group, rec.stake_fraction)
     if not probability_ok:
         reasons.append("阵容未知、阵容过期、样本不足或概率模型未通过验收，因此只展示研究值。")
     if started:
@@ -848,7 +935,17 @@ def run_all(model_dir: str | Path, output: str | Path, *, now: datetime | None =
         logging.exception("run_all: unable to compute drawdown from paper_store")
         drawdown = 0.0
     ledger.paper_mode = _paper_trading_enabled()
-    ai_analyst = EvidenceAnalyst(client_from_env(), AnalysisCache(paper_db))
+    llm_client = client_from_env()
+    ai_analyst = EvidenceAnalyst(llm_client, AnalysisCache(paper_db))
+    llm_shadow_mode = os.getenv("LLM_SHADOW_MODE", "true").casefold() == "true"
+    llm_telemetry = {
+        "provider": getattr(llm_client, "provider", None), "model": getattr(llm_client, "model", None),
+        "configured": llm_client is not None, "eligible": 0, "attempted": 0, "success": 0,
+        "cache_hits": 0, "fallback": 0, "evidence_gate_fallback": 0,
+        "validation_failures": 0, "request_failures": 0, "last_success": None,
+        "last_error_category": None, "adjustment_sum": 0.0,
+        "positive_adjustments": 0, "negative_adjustments": 0, "zero_adjustments": 0,
+    }
     feedback_store = FeedbackStore(paper_db)
     evidence_store = EvidenceStore(paper_db)
     if drawdown >= risk_config.drawdown_circuit_fraction:
@@ -974,13 +1071,35 @@ def run_all(model_dir: str | Path, output: str | Path, *, now: datetime | None =
             evidence = build_match_evidence(row, sport, match_id, now)
             evidence_store.put_many(evidence)
             availability = evidence_availability(evidence)
+            evidence_gate = minimum_evidence_gate(evidence)
+            llm_telemetry["eligible"] += int(evidence_gate["eligible"])
             baseline = float(row.get("model_probability") or .5)
             ai_result = ai_analyst.analyze(match_id=match_id, baseline_probability=baseline, evidence=evidence)
+            llm_telemetry["attempted"] += int(ai_result.attempted)
+            llm_telemetry["success"] += int(ai_result.success)
+            llm_telemetry["cache_hits"] += int(ai_result.cache_hit)
+            llm_telemetry["fallback"] += int(ai_result.status != "LLM_ACTIVE")
+            if ai_result.success:
+                llm_telemetry["last_success"] = now.isoformat()
+            if ai_result.error_category in {"SCHEMA_VALIDATION_ERROR", "EVIDENCE_REFERENCE_ERROR"}:
+                llm_telemetry["validation_failures"] += 1
+            elif ai_result.error_category not in {None, "NOT_CONFIGURED", "MINIMUM_EVIDENCE_GATE"}:
+                llm_telemetry["request_failures"] += 1
+            if ai_result.error_category == "MINIMUM_EVIDENCE_GATE":
+                llm_telemetry["evidence_gate_fallback"] += 1
+            if ai_result.error_category not in {None, "NOT_CONFIGURED", "MINIMUM_EVIDENCE_GATE"}:
+                llm_telemetry["last_error_category"] = ai_result.error_category
+            if ai_result.status == "LLM_ACTIVE":
+                llm_telemetry["adjustment_sum"] += ai_result.adjustment
+                key = "positive_adjustments" if ai_result.adjustment > 0 else (
+                    "negative_adjustments" if ai_result.adjustment < 0 else "zero_adjustments")
+                llm_telemetry[key] += 1
             row.update({
                 "quant_baseline_probability": baseline,
                 "quant_model_version": str(model.trained_through),
                 "ai_prompt_version": PROMPT_VERSION,
-                "ai_model_name": os.getenv("LLM_MODEL") if os.getenv("LLM_API_KEY") else None,
+                "ai_model_name": ai_result.model,
+                "llm_provider": ai_result.provider,
                 "ai_status": ai_result.status,
                 "ai_adjustment": ai_result.adjustment,
                 "ai_adjustment_status": ai_result.adjustment_status,
@@ -996,23 +1115,43 @@ def run_all(model_dir: str | Path, output: str | Path, *, now: datetime | None =
                 "evidence_ids": [item.evidence_id for item in evidence],
                 "evidence_types": [item.evidence_type for item in evidence],
                 "evidence_hash": evidence_hash(evidence),
+                "semantic_evidence_hash": ai_result.semantic_evidence_hash,
+                "ai_error_category": ai_result.error_category,
+                "evidence_gate_eligible": evidence_gate["eligible"],
+                "evidence_gate_required": evidence_gate["required_types"],
+                "evidence_gate_alternatives": evidence_gate["alternative_types"],
+                "evidence_gate_blockers": evidence_gate["missing"],
                 **availability,
             })
-            _attach_data_quality(row, sport, row_model_status)
-            stale_critical = sorted({kind for kind, state in row.get("evidence_type_status", {}).items()
-                                     if state == "AVAILABLE_STALE" and kind in {
-                                         "ROSTER", "RECENT_FORM", "INJURY", "CONFIRMED_STARTERS"}})
-            if stale_critical:
-                row["data_quality_missing"] = sorted(set(row["data_quality_missing"]) |
-                                                     {f"STALE_{kind}" for kind in stale_critical})
-                row["data_quality_score"] = max(0.0, row["data_quality_score"] - .1 * len(stale_critical))
-                row["data_quality_level"] = "LOW" if row["data_quality_score"] < .6 else "MEDIUM"
-            provisional_fraction = float(row.get("stake_fraction") or 0) if row.get("action") == "BET" else 0.0
-            _apply_intelligence_gate(row, sport)
-            if provisional_fraction and row.get("action") != "BET":
-                ledger.release(str(row.get("event_id") or match_id),
-                               f"{sport}:{report_day.isoformat()}", provisional_fraction)
-            _attach_risk_audit(row, bankroll, risk_config)
+            group = f"{sport}:{report_day.isoformat()}"
+            quant_candidate = copy.deepcopy(row)
+            quant_cap = _recompute_post_ai_decision(
+                quant_candidate, final_probability=baseline, bankroll=bankroll,
+                config=risk_config, ledger=ledger, group_key=group)
+            quant_candidate["final_probability"] = ai_result.final_probability
+            quant_candidate["execution_decision_probability"] = baseline
+            _apply_post_ai_quality_gates(quant_candidate, sport, row_model_status)
+            _attach_risk_audit(quant_candidate, bankroll, risk_config)
+
+            final_candidate = copy.deepcopy(row)
+            final_cap = _recompute_post_ai_decision(
+                final_candidate, final_probability=ai_result.final_probability, bankroll=bankroll,
+                config=risk_config, ledger=ledger, group_key=group)
+            final_candidate["execution_decision_probability"] = ai_result.final_probability
+            _apply_post_ai_quality_gates(final_candidate, sport, row_model_status)
+            _attach_risk_audit(final_candidate, bankroll, risk_config)
+
+            execution = _select_llm_execution(
+                quant_candidate, final_candidate, shadow_mode=llm_shadow_mode, baseline=baseline)
+            row.clear(); row.update(execution)
+            cap = quant_cap if llm_shadow_mode else final_cap
+            if row.get("action") == "BET":
+                ledger.commit(str(row.get("event_id") or match_id), group,
+                              float(row.get("stake_fraction") or 0))
+            _attach_bet_fields(
+                row, model_probability=(baseline if llm_shadow_mode else ai_result.final_probability),
+                execution_price=row.get("execution_price"), bankroll=bankroll,
+                cap=cap, paper_db=paper_db)
             row["narrative_summary"] = build_pre_match_summary(row)
             snapshot = PredictionSnapshot(
                 match_id=match_id, prediction_time=now.isoformat(),
@@ -1020,8 +1159,7 @@ def run_all(model_dir: str | Path, output: str | Path, *, now: datetime | None =
                 ai_model_name=row["ai_model_name"], baseline_probability=baseline,
                 ai_adjustment=ai_result.adjustment, final_probability=ai_result.final_probability,
                 market_fair_probability=row.get("market_fair_probability"),
-                edge=(ai_result.final_probability - float(row["execution_price"]))
-                if row.get("execution_price") is not None else None,
+                edge=row.get("edge"),
                 features_json={"sport": sport, "recent_form_a": row.get("recent_form_a"),
                                "recent_form_b": row.get("recent_form_b"),
                                "lineup_status": row.get("lineup_status"),
@@ -1030,7 +1168,7 @@ def run_all(model_dir: str | Path, output: str | Path, *, now: datetime | None =
                 evidence_json=row["evidence"],
                 risk_flags_json=(ai_result.analysis.risk_flags if ai_result.analysis else [ai_result.error or "LLM unavailable"]),
                 recommendation=str(row.get("action") or "NO_BET"), position_size=float(row.get("stake") or 0),
-                llm_provider=os.getenv("LLM_PROVIDER") if os.getenv("LLM_API_KEY") else None,
+                llm_provider=ai_result.provider,
                 data_quality_score=float(row.get("data_quality_score") or 0),
                 missing_evidence=tuple(row.get("data_quality_missing") or ()),
                 evidence_ids=tuple(row.get("evidence_ids") or ()), evidence_hash=row.get("evidence_hash") or "",
@@ -1043,6 +1181,18 @@ def run_all(model_dir: str | Path, output: str | Path, *, now: datetime | None =
                 raw_model_edge=row.get("raw_model_edge"), executable_edge=row.get("executable_edge"),
                 risk_inputs={"bankroll": bankroll, "config": asdict(risk_config)},
                 risk_output=row.get("risk_calculation"), created_at=now.isoformat(),
+                ai_status=ai_result.status,
+                semantic_evidence_hash=row.get("semantic_evidence_hash") or "",
+                cache_hit=bool(ai_result.cache_hit),
+                canonical_sample_key=str(row.get("canonical_sample_key") or match_id) or None,
+                final_action=str(row.get("action") or "NO_BET"),
+                final_stake=float(row.get("stake") or 0),
+                quant_action=str(row.get("quant_action") or "NO_BET"),
+                quant_stake=float(row.get("quant_stake") or 0), quant_ev=row.get("quant_ev"),
+                shadow_final_action=str(row.get("shadow_final_action") or "NO_BET"),
+                shadow_final_stake=float(row.get("shadow_final_stake") or 0),
+                shadow_final_ev=row.get("shadow_final_ev"),
+                llm_decision_mode=str(row.get("llm_decision_mode") or "SHADOW"),
             )
             row["prediction_snapshot_id"] = feedback_store.save_snapshot(snapshot)
         recommendations.extend(sport_rows)
@@ -1118,7 +1268,7 @@ def run_all(model_dir: str | Path, output: str | Path, *, now: datetime | None =
                 "event": row.get("event"),
                 "generated_at": row.get("generated_at"),
                 "bet_side": row.get("outcome"),
-                "model_prob": row.get("model_probability"),
+                "model_prob": row.get("execution_decision_probability") or row.get("model_probability"),
                 "market_odds": (1.0 / float(row["execution_price"])
                                 if row.get("execution_price") else 0.0),
                 "stake_virtual": row.get("stake_virtual") or 0.0,
@@ -1150,9 +1300,14 @@ def run_all(model_dir: str | Path, output: str | Path, *, now: datetime | None =
         risk_notes.append(ledger.breaker_reason)
     if ledger.warn_reason:
         risk_notes.append(ledger.warn_reason)
+    llm_telemetry["average_adjustment"] = (
+        llm_telemetry["adjustment_sum"] / llm_telemetry["success"]
+        if llm_telemetry["success"] else 0.0)
+    llm_telemetry["mode"] = "SHADOW" if llm_shadow_mode else "ACTIVE"
     system_health = build_system_health(
         audits=audits, statuses=statuses, data_health=data_health,
-        llm_provider=os.getenv("LLM_PROVIDER"), llm_configured=bool(os.getenv("LLM_API_KEY")),
+        llm_provider=getattr(llm_client, "provider", None), llm_configured=llm_client is not None,
+        llm_telemetry=llm_telemetry,
     )
     provider_health = {}
     for sport, source_rows in {"lol": lol_sources, "nba": nba_sources, "cs2": cs2_sources}.items():
@@ -1174,6 +1329,7 @@ def run_all(model_dir: str | Path, output: str | Path, *, now: datetime | None =
     report = {
         "report_date": report_day.isoformat(), "generated_at": now.isoformat(),
         "bankroll_usdc": bankroll, "recommendations": recommendations, "sport_status": statuses,
+        "llm_attribution": feedback_store.shadow_attribution_summary(),
         "schedule_coverage": audits,
         "coverage_report": coverage.as_dict(),
         "match_lifecycle": lifecycle_rows,
