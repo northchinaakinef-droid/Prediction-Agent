@@ -76,7 +76,7 @@ jobs:
               script = textwrap.dedent("""import json,urllib.request,urllib.error,sys
           u=sys.argv[1]; r={'method':'GET','timeout_seconds':20,'endpoint':'api.bo3.gg/api/v1/matches'}
           try:
-           q=urllib.request.Request(u,headers={'Origin':'https://bo3.gg','Referer':'https://bo3.gg/','Accept':'application/json'})
+           q=urllib.request.Request(u,headers={'Origin':'https://bo3.gg','Referer':'https://bo3.gg/','Accept':'application/json','User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36'})
            with urllib.request.urlopen(q,timeout=20) as x:
             b=x.read(); r.update(http_status=x.status,content_type=x.headers.get('Content-Type'),body_bytes=len(b))
             try:

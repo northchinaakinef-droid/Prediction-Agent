@@ -164,6 +164,8 @@ jobs:
                                })
           provider_total = len(provider_health)
           latest_live = health.get("live") or {}
+          from prediction_agent.context import recent_form_artifact_health
+          direct_cs2_health = recent_form_artifact_health()
           result = {
               "safety_flags": flags,
               "release_sha": release,
@@ -196,8 +198,8 @@ jobs:
                   "PRICE_STALE", "LIVE_STATE_DIVERGENCE")},
               "priority_bad_market_alerts": priority_bad_market,
               "feishu_render": render_audit,
-              "cs2_recent_form_health": str(data_health.get("cs2_recent_form", "UNKNOWN")),
-              "cs2_recent_form_detail": data_health.get("cs2_recent_form_detail") or {},
+              "cs2_recent_form_health": str(direct_cs2_health.get("artifact_status", "UNKNOWN")),
+              "cs2_recent_form_detail": direct_cs2_health,
               "lol_roster_health": str(data_health.get("lol_roster", data_health.get("roster", "UNKNOWN"))),
               "provider_readiness": {"ready": provider_ready, "total": provider_total},
               "core_integrity": integrity,
