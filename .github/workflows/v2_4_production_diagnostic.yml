@@ -52,7 +52,7 @@ jobs:
           from pathlib import Path
 
           DEPLOYED_AT = "2026-08-27T11:39:03+00:00"
-          EXPECTED_RELEASE = "a51a09ce591f68556784afffc85a11ec49688d3e"
+          EXPECTED_RELEASE = "__EXPECTED_RELEASE_SHA__"
           EXPECTED_HASHES = {
               "src/prediction_agent/context.py": "4283dd351ba594231f8432cb150c4500f4fd352fa0adbff1a7dbf4947b088c61",
               "src/prediction_agent/ai/validator.py": "340fb2d6c4d2bbd2e861fcbd823dfba8a650956c973fbe42d0e7ced89376bcae",
@@ -206,6 +206,7 @@ jobs:
           }
           print(json.dumps(result, ensure_ascii=False, sort_keys=True))
           PY
+          sed -i "s/__EXPECTED_RELEASE_SHA__/$GITHUB_SHA/" "$RUNNER_TEMP/v2_4_probe.py"
 
       - name: Run production read-only probe
         env:
