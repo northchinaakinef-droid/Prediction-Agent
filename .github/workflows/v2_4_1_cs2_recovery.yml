@@ -1,0 +1,143 @@
+name: V2.4.1 CS2 recent form recovery
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v2-4-1-cs2-recovery
+  cancel-in-progress: false
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare protected SSH
+        env:
+          PROD_HOST: ${{ secrets.PROD_HOST }}
+          PROD_SSH_KEY: ${{ secrets.PROD_SSH_KEY }}
+        run: |
+          test -n "$PROD_HOST"
+          test -n "$PROD_SSH_KEY"
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$PROD_SSH_KEY" > ~/.ssh/cs2_recovery_key
+          chmod 600 ~/.ssh/cs2_recovery_key
+          ssh-keyscan -H "$PROD_HOST" > ~/.ssh/known_hosts
+      - name: Run sanitized read-only production probe
+        env:
+          PROD_HOST: ${{ secrets.PROD_HOST }}
+          PROD_USER: ${{ secrets.PROD_USER }}
+        run: |
+          ssh -i ~/.ssh/cs2_recovery_key -o BatchMode=yes "$PROD_USER@$PROD_HOST" \
+            'sudo python3 -' > "$RUNNER_TEMP/result.json" <<'PY'
+          import hashlib, json, subprocess, urllib.error, urllib.parse, urllib.request
+          from datetime import datetime, timedelta, timezone
+          from pathlib import Path
+
+          root = Path('/opt/prediction-agent')
+          endpoint = 'https://api.bo3.gg/api/v1/matches'
+
+          def artifact(path):
+              result = {'path': str(path), 'exists': path.is_file()}
+              if not path.is_file(): return result
+              raw = path.read_bytes(); stat = path.stat()
+              result.update({'sha256': hashlib.sha256(raw).hexdigest(), 'size': len(raw),
+                             'mtime': datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat()})
+              try:
+                  data = json.loads(raw)
+                  cs2 = data.get('cs2') or {}; meta = (data.get('_metadata') or {}).get('cs2') or {}
+                  result.update({'schema_valid': isinstance(data, dict) and isinstance(cs2, dict),
+                                 'team_count': len(cs2), 'record_count': int(meta.get('record_count') or 0),
+                                 'generated_at': meta.get('generated_at') or (data.get('_metadata') or {}).get('generated_at'),
+                                 'latest_match_time': meta.get('latest_match_time'), 'coverage': meta.get('coverage')})
+              except Exception: result['schema_valid'] = False
+              return result
+
+          def request_probe(command_prefix=None):
+              now = datetime.now(timezone.utc)
+              params = {'scope':'widget-matches','page[offset]':0,'page[limit]':1,
+                        'sort':'tier_rank,-start_date','filter[matches.status][in]':'finished',
+                        'filter[matches.start_date][lt]':now.strftime('%Y-%m-%d %H:%M'),
+                        'filter[matches.start_date][gt]':(now-timedelta(days=1)).strftime('%Y-%m-%d %H:%M'),
+                        'filter[matches.discipline_id][eq]':1,'with':'teams,tournament,games'}
+              url = endpoint + '?' + urllib.parse.urlencode(params)
+              script = """import json,urllib.request,urllib.error,sys
+u=sys.argv[1]; r={'method':'GET','timeout_seconds':20,'endpoint':'api.bo3.gg/api/v1/matches'}
+try:
+ q=urllib.request.Request(u,headers={'Origin':'https://bo3.gg','Referer':'https://bo3.gg/','Accept':'application/json'})
+ with urllib.request.urlopen(q,timeout=20) as x:
+  b=x.read(); r.update(http_status=x.status,content_type=x.headers.get('Content-Type'),body_bytes=len(b))
+  try:
+   p=json.loads(b); r.update(json_valid=True,top_level_keys=sorted(p)[:20],result_count=len(p.get('results') or []))
+  except Exception:r['json_valid']=False
+except urllib.error.HTTPError as e:r.update(http_status=e.code,error_category='HTTP_'+str(e.code),content_type=e.headers.get('Content-Type'))
+except urllib.error.URLError as e:r['error_category']='DNS_OR_CONNECTION'
+except TimeoutError:r['error_category']='TIMEOUT'
+except Exception as e:r['error_category']=type(e).__name__
+print(json.dumps(r,sort_keys=True))"""
+              cmd = (command_prefix or []) + ['python3','-c',script,url]
+              return json.loads(subprocess.check_output(cmd,text=True,timeout=30))
+
+          status_path = root/'artifacts/recent_form_refresh_status.json'
+          status = {'exists': status_path.is_file()}
+          if status_path.is_file():
+              try:
+                  value=json.loads(status_path.read_text())
+                  error=str(value.get('error') or '').casefold()
+                  category = ('HTTP_403' if '403' in error else 'HTTP_404' if '404' in error else
+                              'HTTP_429' if '429' in error else 'TIMEOUT' if 'timeout' in error else
+                              'DNS_OR_CONNECTION' if any(x in error for x in ('name resolution','connection','reset')) else
+                              'JSON_DECODE' if 'json' in error else 'SCHEMA' if 'schema' in error else
+                              'EMPTY' if 'empty' in error else 'OTHER' if error else None)
+                  status.update({k:value.get(k) for k in ('status','attempted_at','provider','replaced','fallback_artifact_usable','record_count','team_count','covered_teams','last_success')})
+                  status['last_error_category']=category
+              except Exception: status['schema_valid']=False
+
+          backups=[]
+          for base in (Path('/opt/prediction-agent-backups'), Path('/opt/backups/prediction-agent')):
+              if not base.is_dir(): continue
+              for directory in sorted(base.iterdir(),reverse=True)[:30]:
+                  for relative in ('artifacts/recent_form.json','recent_form.json'):
+                      candidate=directory/relative
+                      if candidate.is_file():
+                          item=artifact(candidate); item['backup']=directory.name; backups.append(item); break
+
+          unit={}
+          for prop in ('WorkingDirectory','ExecStart','Result','ExecMainStatus','InactiveExitTimestamp'):
+              value=subprocess.run(['systemctl','show','prediction-agent-cs2-recent-form-refresh.service','--property='+prop,'--value'],capture_output=True,text=True).stdout.strip()
+              unit[prop]=value if prop != 'ExecStart' else ('configured' if value else None)
+          current=artifact(root/'artifacts/recent_form.json')
+          report={'endpoint':endpoint,'host_request':request_probe(),
+                  'container_request':request_probe(['docker','compose','-f',str(root/'compose.yaml'),'--project-directory',str(root),'exec','-T','prediction-agent']),
+                  'current_artifact':current,'refresh_status':status,'backups':backups,'systemd':unit,
+                  'deployment_includes_recent_form': True}
+          print(json.dumps(report,sort_keys=True))
+          PY
+          python -m json.tool "$RUNNER_TEMP/result.json" >/dev/null
+      - name: Generate sanitized report
+        run: |
+          python - "$RUNNER_TEMP/result.json" <<'PY'
+          import json,sys
+          from pathlib import Path
+          r=json.loads(Path(sys.argv[1]).read_text())
+          lines=['# V2.4.1 CS2 Recent Form Read-Only Inspection','',
+                 f"- Endpoint: `{r['endpoint']}`",f"- Host request: `{r['host_request']}`",
+                 f"- Container request: `{r['container_request']}`",f"- Current artifact: `{r['current_artifact']}`",
+                 f"- Refresh status: `{r['refresh_status']}`",f"- Backup candidates: `{r['backups']}`",
+                 f"- systemd: `{r['systemd']}`",'- Deployment archive currently includes `artifacts/recent_form.json`: `True`']
+          Path('V2_4_1_CS2_READ_ONLY_INSPECTION.md').write_text('\n'.join(lines)+'\n')
+          PY
+          cat V2_4_1_CS2_READ_ONLY_INSPECTION.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: v2-4-1-cs2-read-only-inspection
+          path: V2_4_1_CS2_READ_ONLY_INSPECTION.md
+          retention-days: 30
+      - name: Remove temporary SSH material
+        if: always()
+        run: rm -f ~/.ssh/cs2_recovery_key "$RUNNER_TEMP/result.json"
