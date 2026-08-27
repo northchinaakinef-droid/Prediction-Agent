@@ -35,7 +35,7 @@ jobs:
         run: |
           ssh -i ~/.ssh/cs2_recovery_key -o BatchMode=yes "$PROD_USER@$PROD_HOST" \
             'sudo python3 -' > "$RUNNER_TEMP/result.json" <<'PY'
-          import hashlib, json, subprocess, urllib.error, urllib.parse, urllib.request
+          import hashlib, json, subprocess, textwrap, urllib.error, urllib.parse, urllib.request
           from datetime import datetime, timedelta, timezone
           from pathlib import Path
 
@@ -66,20 +66,20 @@ jobs:
                         'filter[matches.start_date][gt]':(now-timedelta(days=1)).strftime('%Y-%m-%d %H:%M'),
                         'filter[matches.discipline_id][eq]':1,'with':'teams,tournament,games'}
               url = endpoint + '?' + urllib.parse.urlencode(params)
-              script = """import json,urllib.request,urllib.error,sys
-u=sys.argv[1]; r={'method':'GET','timeout_seconds':20,'endpoint':'api.bo3.gg/api/v1/matches'}
-try:
- q=urllib.request.Request(u,headers={'Origin':'https://bo3.gg','Referer':'https://bo3.gg/','Accept':'application/json'})
- with urllib.request.urlopen(q,timeout=20) as x:
-  b=x.read(); r.update(http_status=x.status,content_type=x.headers.get('Content-Type'),body_bytes=len(b))
-  try:
-   p=json.loads(b); r.update(json_valid=True,top_level_keys=sorted(p)[:20],result_count=len(p.get('results') or []))
-  except Exception:r['json_valid']=False
-except urllib.error.HTTPError as e:r.update(http_status=e.code,error_category='HTTP_'+str(e.code),content_type=e.headers.get('Content-Type'))
-except urllib.error.URLError as e:r['error_category']='DNS_OR_CONNECTION'
-except TimeoutError:r['error_category']='TIMEOUT'
-except Exception as e:r['error_category']=type(e).__name__
-print(json.dumps(r,sort_keys=True))"""
+              script = textwrap.dedent("""import json,urllib.request,urllib.error,sys
+          u=sys.argv[1]; r={'method':'GET','timeout_seconds':20,'endpoint':'api.bo3.gg/api/v1/matches'}
+          try:
+           q=urllib.request.Request(u,headers={'Origin':'https://bo3.gg','Referer':'https://bo3.gg/','Accept':'application/json'})
+           with urllib.request.urlopen(q,timeout=20) as x:
+            b=x.read(); r.update(http_status=x.status,content_type=x.headers.get('Content-Type'),body_bytes=len(b))
+            try:
+             p=json.loads(b); r.update(json_valid=True,top_level_keys=sorted(p)[:20],result_count=len(p.get('results') or []))
+            except Exception:r['json_valid']=False
+          except urllib.error.HTTPError as e:r.update(http_status=e.code,error_category='HTTP_'+str(e.code),content_type=e.headers.get('Content-Type'))
+          except urllib.error.URLError as e:r['error_category']='DNS_OR_CONNECTION'
+          except TimeoutError:r['error_category']='TIMEOUT'
+          except Exception as e:r['error_category']=type(e).__name__
+          print(json.dumps(r,sort_keys=True))""")
               cmd = (command_prefix or []) + ['python3','-c',script,url]
               return json.loads(subprocess.check_output(cmd,text=True,timeout=30))
 
