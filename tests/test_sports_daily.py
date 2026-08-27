@@ -14,6 +14,10 @@ from prediction_agent import context
 
 
 class SportsDailyTests(unittest.TestCase):
+    def test_context_artifact_directory_resolves_from_runtime_workdir(self):
+        expected = (Path.cwd() / "artifacts").resolve()
+        self.assertEqual(context.ARTIFACT_DIR, expected)
+
     def test_lol_roster_health_is_historical_and_never_confirmed(self):
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / "lol_roster.json"

@@ -54,7 +54,7 @@ jobs:
           DEPLOYED_AT = "2026-08-27T11:39:03+00:00"
           EXPECTED_RELEASE = "08a035588b3bc41db9962b9417c55ea4aab01aaf"
           EXPECTED_HASHES = {
-              "src/prediction_agent/context.py": "9d404f992737489d8a18d46886c8544d92ec942265981ed202e6bbf452858381",
+              "src/prediction_agent/context.py": "a8cfba3830b6a45d5250f1446a96b8bcea439d332df7827b6ce603f04fa99499",
               "src/prediction_agent/ai/validator.py": "340fb2d6c4d2bbd2e861fcbd823dfba8a650956c973fbe42d0e7ced89376bcae",
               "src/prediction_agent/evidence_pipeline.py": "4f4a088084c45307b034ae4fae2f9d56a012660f919037a69eb96a9506ee1427",
               "src/prediction_agent/risk.py": "2fc94b367667e101ce6c0d6c7b8d462dc4915cdcf82fbf4417aee00e1d234967",

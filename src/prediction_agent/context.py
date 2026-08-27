@@ -14,7 +14,10 @@ from typing import Any
 
 from .entities import canonical_team
 
-ARTIFACT_DIR = Path(__file__).resolve().parents[2] / "artifacts"
+# Runtime images install this package under site-packages while mounting frozen
+# artifacts at ``/app/artifacts``.  Resolve from the process working directory
+# (``/app`` in production) instead of from the installed module location.
+ARTIFACT_DIR = (Path.cwd() / "artifacts").resolve()
 
 
 @lru_cache(maxsize=1)
