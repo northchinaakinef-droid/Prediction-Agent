@@ -1,0 +1,193 @@
+name: V2.4 production remediation
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Inspect first; apply only after reviewing the inspection artifact
+        required: true
+        default: inspect
+        type: choice
+        options: [inspect, apply]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v2-4-production-remediation
+  cancel-in-progress: false
+
+jobs:
+  remediate:
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare protected SSH
+        env:
+          PROD_HOST: ${{ secrets.PROD_HOST }}
+          PROD_SSH_KEY: ${{ secrets.PROD_SSH_KEY }}
+        run: |
+          test -n "$PROD_HOST"
+          test -n "$PROD_SSH_KEY"
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$PROD_SSH_KEY" > ~/.ssh/v2_4_remediation_key
+          chmod 600 ~/.ssh/v2_4_remediation_key
+          ssh-keyscan -H "$PROD_HOST" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Build sanitized inspection probe
+        run: |
+          cat > "$RUNNER_TEMP/inspect.py" <<'PY'
+          import json
+          import os
+          import sqlite3
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          root = Path('/app')
+          artifacts = root / 'artifacts'
+
+          def metadata(name):
+              path = artifacts / name
+              result = {'exists': path.exists()}
+              if not path.exists():
+                  return result
+              stat = path.stat()
+              result.update({'size': stat.st_size, 'mode': oct(stat.st_mode & 0o777),
+                             'modified_at': datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat()})
+              try:
+                  value = json.loads(path.read_text(encoding='utf-8'))
+                  result['schema'] = 'JSON_OBJECT' if isinstance(value, dict) else type(value).__name__
+                  if name == 'recent_form.json':
+                      result['lol_teams'] = len(value.get('lol') or {})
+                      result['cs2_teams'] = len(value.get('cs2') or {})
+                      result['cs2_latest_match_at'] = max((str(row.get('latest_match_at'))
+                          for row in (value.get('cs2') or {}).values() if row.get('latest_match_at')), default=None)
+                  if name == 'lol_meta_model.json':
+                      model = value.get('model') or {}
+                      rosters = model.get('latest_team_rosters') or {}
+                      result['historical_roster_teams'] = len(rosters)
+                      result['complete_historical_rosters'] = sum(len(row or []) == 5 for row in rosters.values())
+                      result['trained_through'] = model.get('trained_through')
+              except Exception:
+                  result['schema'] = 'INVALID_JSON'
+              return result
+
+          report_path = root / 'reports/daily.json'
+          report = json.loads(report_path.read_text(encoding='utf-8')) if report_path.exists() else {}
+          data_health = (report.get('system_health') or {}).get('data') or {}
+          external = root / 'data/external'
+          cs2_csvs = sorted({str(path.relative_to(external)) for pattern in ('**/*cs2*.csv', '**/*CS2*.csv',
+                              'valve_cs2_vrs/**/*.csv') for path in external.glob(pattern) if path.is_file()}) \
+              if external.exists() else []
+          result = {
+              'flags': {name: os.getenv(name, 'UNSET').lower() for name in (
+                  'REAL_TRADING_DISABLED', 'LLM_SHADOW_MODE', 'PROVIDER_INGESTION_SHADOW')},
+              'recent_form': metadata('recent_form.json'),
+              'lol_roster_artifact': metadata('lol_roster.json'),
+              'lol_frozen_model': metadata('lol_meta_model.json'),
+              'cs2_input_csv_count': len(cs2_csvs),
+              'cs2_input_names': cs2_csvs[:20],
+              'reported_cs2_health': data_health.get('cs2_recent_form', 'UNKNOWN'),
+              'reported_cs2_detail': data_health.get('cs2_recent_form_detail') or {},
+              'reported_lol_roster_health': data_health.get('lol_roster', 'UNKNOWN'),
+              'report_generated_at': report.get('generated_at'),
+          }
+          print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+          PY
+
+      - name: Inspect production read-only
+        env:
+          PROD_HOST: ${{ secrets.PROD_HOST }}
+          PROD_USER: ${{ secrets.PROD_USER }}
+        run: |
+          ssh -i ~/.ssh/v2_4_remediation_key -o BatchMode=yes "$PROD_USER@$PROD_HOST" \
+            'cd /opt/prediction-agent && sudo docker compose exec -T -e PYTHONDONTWRITEBYTECODE=1 prediction-agent python -' \
+            < "$RUNNER_TEMP/inspect.py" > "$RUNNER_TEMP/container.json"
+          ssh -i ~/.ssh/v2_4_remediation_key -o BatchMode=yes "$PROD_USER@$PROD_HOST" \
+            'python3 - <<'"'"'PY'"'"'
+          import json, os, subprocess
+          from pathlib import Path
+          root=Path("/opt/prediction-agent")
+          mounts=[]
+          cid=subprocess.check_output(["sudo","docker","compose","-f",str(root/"compose.yaml"),"--project-directory",str(root),"ps","-q","prediction-agent"],text=True).strip()
+          if cid:
+              rows=json.loads(subprocess.check_output(["sudo","docker","inspect",cid],text=True))[0].get("Mounts",[])
+              mounts=[{"destination":row.get("Destination"),"read_only":not bool(row.get("RW"))} for row in rows]
+          units=[]
+          for kind in ("timers","services"):
+              text=subprocess.run(["systemctl","list-units","--all","--type="+kind[:-1],"--no-legend","--no-pager"],capture_output=True,text=True).stdout
+              units += [line.split()[0] for line in text.splitlines() if any(term in line.casefold() for term in ("prediction","sidecar","recent","context"))]
+          print(json.dumps({"mounts":mounts,"related_units":sorted(set(units))},sort_keys=True))
+          PY' > "$RUNNER_TEMP/host.json"
+          python -m json.tool "$RUNNER_TEMP/container.json" >/dev/null
+          python -m json.tool "$RUNNER_TEMP/host.json" >/dev/null
+
+      - name: Apply approved remediation
+        if: inputs.mode == 'apply'
+        env:
+          PROD_HOST: ${{ secrets.PROD_HOST }}
+          PROD_USER: ${{ secrets.PROD_USER }}
+        run: |
+          cat > "$RUNNER_TEMP/sudoedit_editor.py" <<'PY'
+          #!/usr/bin/env python3
+          import sys
+          from pathlib import Path
+          path=Path(sys.argv[1])
+          lines=path.read_text(encoding='utf-8').splitlines()
+          output=[]
+          found=False
+          for line in lines:
+              if line.startswith('PROVIDER_INGESTION_SHADOW='):
+                  output.append('PROVIDER_INGESTION_SHADOW=true')
+                  found=True
+              else:
+                  output.append(line)
+          if not found:
+              output.append('PROVIDER_INGESTION_SHADOW=true')
+          path.write_text('\n'.join(output)+'\n',encoding='utf-8')
+          PY
+          chmod 700 "$RUNNER_TEMP/sudoedit_editor.py"
+          scp -i ~/.ssh/v2_4_remediation_key "$RUNNER_TEMP/sudoedit_editor.py" \
+            "$PROD_USER@$PROD_HOST:/tmp/v2_4_sudoedit_editor.py"
+          ssh -i ~/.ssh/v2_4_remediation_key -o BatchMode=yes "$PROD_USER@$PROD_HOST" \
+            'chmod 700 /tmp/v2_4_sudoedit_editor.py && SUDO_EDITOR=/tmp/v2_4_sudoedit_editor.py sudoedit /opt/prediction-agent/.env && rm -f /tmp/v2_4_sudoedit_editor.py && cd /opt/prediction-agent && sudo docker compose up -d --force-recreate prediction-agent'
+
+      - name: Generate sanitized inspection report
+        run: |
+          python - "$RUNNER_TEMP/container.json" "$RUNNER_TEMP/host.json" <<'PY'
+          import json, sys
+          from pathlib import Path
+          container=json.loads(Path(sys.argv[1]).read_text(encoding='utf-8'))
+          host=json.loads(Path(sys.argv[2]).read_text(encoding='utf-8'))
+          recent=container['recent_form']
+          model=container['lol_frozen_model']
+          lines=[
+              '# V2.4 Production Remediation Inspection','',
+              f"Mode: `${{ inputs.mode }}`",'',
+              f"- Provider shadow flag: `{container['flags']['PROVIDER_INGESTION_SHADOW']}`",
+              f"- recent_form.json: `{recent}`",
+              f"- CS2 input CSV count: `{container['cs2_input_csv_count']}`",
+              f"- Reported CS2 health: `{container['reported_cs2_health']}`",
+              f"- lol_roster.json: `{container['lol_roster_artifact']}`",
+              f"- Frozen LoL model roster metadata: `{model}`",
+              f"- Reported LoL roster health: `{container['reported_lol_roster_health']}`",
+              f"- Container mounts: `{host['mounts']}`",
+              f"- Related systemd units: `{host['related_units']}`",
+          ]
+          Path('V2_4_PRODUCTION_REMEDIATION_INSPECTION.md').write_text('\n'.join(lines)+'\n',encoding='utf-8')
+          PY
+          cat V2_4_PRODUCTION_REMEDIATION_INSPECTION.md >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: v2-4-production-remediation-inspection-${{ inputs.mode }}
+          path: V2_4_PRODUCTION_REMEDIATION_INSPECTION.md
+          retention-days: 30
+
+      - name: Remove temporary SSH material
+        if: always()
+        run: rm -f ~/.ssh/v2_4_remediation_key "$RUNNER_TEMP/inspect.py" "$RUNNER_TEMP/sudoedit_editor.py" "$RUNNER_TEMP/container.json" "$RUNNER_TEMP/host.json"
