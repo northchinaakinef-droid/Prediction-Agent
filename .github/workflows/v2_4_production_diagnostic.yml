@@ -52,9 +52,9 @@ jobs:
           from pathlib import Path
 
           DEPLOYED_AT = "2026-08-27T11:39:03+00:00"
-          EXPECTED_RELEASE = "08a035588b3bc41db9962b9417c55ea4aab01aaf"
+          EXPECTED_RELEASE = "5965c2ca8722ccef5a2c8c1b9076fd18db979332"
           EXPECTED_HASHES = {
-              "src/prediction_agent/context.py": "a8cfba3830b6a45d5250f1446a96b8bcea439d332df7827b6ce603f04fa99499",
+              "src/prediction_agent/context.py": "3c7a1f4d323b40b843e0f1c805044cb3081c83d422742b30cc3bac13264231d2",
               "src/prediction_agent/ai/validator.py": "340fb2d6c4d2bbd2e861fcbd823dfba8a650956c973fbe42d0e7ced89376bcae",
               "src/prediction_agent/evidence_pipeline.py": "4f4a088084c45307b034ae4fae2f9d56a012660f919037a69eb96a9506ee1427",
               "src/prediction_agent/risk.py": "2fc94b367667e101ce6c0d6c7b8d462dc4915cdcf82fbf4417aee00e1d234967",
