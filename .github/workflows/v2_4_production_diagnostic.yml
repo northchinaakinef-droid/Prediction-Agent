@@ -52,14 +52,14 @@ jobs:
           from pathlib import Path
 
           DEPLOYED_AT = "2026-08-27T11:39:03+00:00"
-          EXPECTED_RELEASE = "5965c2ca8722ccef5a2c8c1b9076fd18db979332"
+          EXPECTED_RELEASE = "a51a09ce591f68556784afffc85a11ec49688d3e"
           EXPECTED_HASHES = {
-              "src/prediction_agent/context.py": "3c7a1f4d323b40b843e0f1c805044cb3081c83d422742b30cc3bac13264231d2",
+              "src/prediction_agent/context.py": "4283dd351ba594231f8432cb150c4500f4fd352fa0adbff1a7dbf4947b088c61",
               "src/prediction_agent/ai/validator.py": "340fb2d6c4d2bbd2e861fcbd823dfba8a650956c973fbe42d0e7ced89376bcae",
               "src/prediction_agent/evidence_pipeline.py": "4f4a088084c45307b034ae4fae2f9d56a012660f919037a69eb96a9506ee1427",
               "src/prediction_agent/risk.py": "2fc94b367667e101ce6c0d6c7b8d462dc4915cdcf82fbf4417aee00e1d234967",
               "src/prediction_agent/roster.py": "2b2c4ad86afcdea040efd57040583636dc5cbe8a854b37945fc35b826d62a0c1",
-              "src/prediction_agent/sports_daily.py": "f81eaf4c22f88db48d093029182d9599fe1ceba195692bac5b1d8d12a52d2a34",
+              "src/prediction_agent/sports_daily.py": "f519599b3e9360eb86caf1aa9969c7e493a9573e5821ba2c7ec60dcbbf7c8a0b",
           }
 
           root = Path("/app")
