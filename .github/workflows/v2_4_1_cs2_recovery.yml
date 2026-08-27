@@ -35,7 +35,7 @@ jobs:
         run: |
           ssh -i ~/.ssh/cs2_recovery_key -o BatchMode=yes "$PROD_USER@$PROD_HOST" \
             'sudo python3 -' > "$RUNNER_TEMP/result.json" <<'PY'
-          import hashlib, json, subprocess, textwrap, urllib.error, urllib.parse, urllib.request
+          import hashlib, json, subprocess, tarfile, textwrap, urllib.error, urllib.parse, urllib.request
           from datetime import datetime, timedelta, timezone
           from pathlib import Path
 
@@ -99,9 +99,22 @@ jobs:
               except Exception: status['schema_valid']=False
 
           backups=[]
-          for base in (Path('/opt/prediction-agent-backups'), Path('/opt/backups/prediction-agent')):
+          for base in (Path('/home/ubuntu/prediction-agent-backups'), Path('/opt/prediction-agent-backups'), Path('/opt/backups/prediction-agent')):
               if not base.is_dir(): continue
               for directory in sorted(base.iterdir(),reverse=True)[:30]:
+                  archive=directory/'code.tgz'
+                  if archive.is_file():
+                      try:
+                          with tarfile.open(archive,'r:gz') as bundle:
+                              member=next((row for row in bundle.getmembers() if row.name.lstrip('./') == 'artifacts/recent_form.json'),None)
+                              if member:
+                                  raw=bundle.extractfile(member).read(); data=json.loads(raw); cs2=data.get('cs2') or {}; meta=(data.get('_metadata') or {}).get('cs2') or {}
+                                  backups.append({'backup':directory.name,'source':'code.tgz','sha256':hashlib.sha256(raw).hexdigest(),
+                                      'size':len(raw),'schema_valid':isinstance(data,dict) and isinstance(cs2,dict),'team_count':len(cs2),
+                                      'record_count':int(meta.get('record_count') or 0),'generated_at':meta.get('generated_at') or (data.get('_metadata') or {}).get('generated_at'),
+                                      'latest_match_time':meta.get('latest_match_time'),'coverage':meta.get('coverage')})
+                                  continue
+                      except Exception: pass
                   for relative in ('artifacts/recent_form.json','recent_form.json'):
                       candidate=directory/relative
                       if candidate.is_file():
