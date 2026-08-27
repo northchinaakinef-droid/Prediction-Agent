@@ -1,0 +1,14 @@
+# PredictionAgent V2.4 frozen source manifest
+# Scope: tracked runtime source/config/deployment files plus tests/test_v24_signal_quality.py
+# Generated: 2026-08-27
+# Aggregate is SHA-256 of sorted "<file-sha256>  <path>\n" records.
+aggregate  5bbd9db4a469a5cf9b9d2968ed12625075147385f561aa04b8f3815bbe120706
+b20e658f1d20d6613937b8d90bc1e87981940c56c864f1cdbe5577a25c63bc34  config/team_aliases.json
+050f324c2b76b01700a920686c85961d07659789472acab9183249b536f54920  src/prediction_agent/betting_gate.py
+5c8e2ddb2ee8d864a8f65f016e0512fc8dc1ee225f4b1dd4ddd4a4beab730025  src/prediction_agent/delivery.py
+c4e04add0dd9192eeca3ebc29e471e07ae606c1a9e2003ceb2a97f6250aad802  src/prediction_agent/entities.py
+b6a92ddc37ece2824d8291067f04b3c5bce0b0a9874c9ead534c85737fd40968  src/prediction_agent/live_engine.py
+64db1f1b4a801ab98efe017e87721852051a3eee8aa4d0f0c1586831944ad9c8  src/prediction_agent/live_runtime.py
+677138431f4e5a1fb929189ef6d9b0c7ac28348d0ebc915d9b558562f31d3b02  src/prediction_agent/lol_daily.py
+2fd111c3b57355ddbba04443d72a22277e4d500a750694e3832d8270c11ae54b  src/prediction_agent/lol_model.py
+d786ee19024845eb783007b38af96358d5e63522a92405017ab816dd6e23b7a8  tests/test_v24_signal_quality.py

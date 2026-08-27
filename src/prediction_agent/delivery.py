@@ -4,6 +4,7 @@ import base64
 import hashlib
 import hmac
 import json
+import os
 import re
 import time
 from dataclasses import dataclass
@@ -232,7 +233,12 @@ def format_daily_report(report: dict[str, Any], report_date: date | None = None)
 
     day = report_date or (date.fromisoformat(report["report_date"]) if report.get("report_date") else date.today())
     rows = report.get("recommendations", [])
-    bets = [row for row in rows if row.get("action") == "BET"]
+    candidates = [row for row in rows if row.get("action") == "BET"]
+    bets = [row for row in candidates if (
+        str(row.get("final_status") or "").upper() == "VIRTUAL_BET"
+        or str(row.get("bet_status") or "").casefold() in {"虚拟下注", "virtual_bet", "paper_bet"}
+        or bool(row.get("canonical_virtual_bet_id"))
+    )]
     skipped_rows = [row for row in rows if row.get("action") != "BET"]
     skipped = len(skipped_rows)
     risk_status = report.get("risk_status") or {}
@@ -246,7 +252,7 @@ def format_daily_report(report: dict[str, Any], report_date: date | None = None)
             return "警戒（额度减半）"
         return "正常"
 
-    lines = [f"【今日模拟下注】{len(bets)}场"]
+    lines = [f"【今日下注候选】{len(candidates)}场｜实际虚拟下注 {len(bets)}场"]
     if report.get("today_scheduled_matches") is not None:
         lines.append(f"【今日赛程】实际场次 {int(report['today_scheduled_matches'])} 场")
     coverage = report.get("coverage_report") or {}
@@ -258,14 +264,16 @@ def format_daily_report(report: dict[str, Any], report_date: date | None = None)
             f"数据不足 {int(coverage.get('data_incomplete_events') or 0)}"
         )
     separator = "━━━━━━━━━━━━━━━━"
-    if bets:
+    if candidates:
         lines.append(separator)
-        for index, row in enumerate(bets, 1):
+        for index, row in enumerate(candidates, 1):
             event = row.get("event") or row.get("event_id") or "未知赛事"
             outcome = row.get("outcome") or "-"
             stake = float(row.get("stake") or 0)
-            status_label = {"虚拟下注": "【虚拟下注】", "真实建议": "【下注建议】"}.get(
-                str(row.get("bet_status") or ""), "")
+            final_status = str(row.get("final_status") or (
+                "VIRTUAL_BET" if row in bets else "SKIPPED" if row.get("blocker") or row.get("reasons")
+                else "WATCH"))
+            status_label = "【虚拟研究】" if row in bets else "【候选】"
             lines.append(f"[{index}]{status_label} {event} | {outcome} | {stake:.2f} USDC")
             lines.append(
                 f"    EV: {percent(row.get('expected_value'))} | "
@@ -283,16 +291,20 @@ def format_daily_report(report: dict[str, Any], report_date: date | None = None)
                 f"状态: {row.get('recommendation_state') or row.get('action') or 'WATCH'} | "
                 f"缺失: {', '.join(str(value) for value in missing) if missing else '无'}"
             )
+            blocker = row.get("blocker") or "；".join(_key_reasons(row, limit=3)) or "无"
             lines.append(f"    阵容状态: {row.get('lineup_status') or '未知'} | "
-                         f"下注状态: {row.get('bet_status') or '跳过'}")
+                         f"Blocker: {blocker} | 最终状态: {final_status}")
             if str(row.get("lineup_status") or "").upper() == "HISTORICAL":
                 lines.append("    首发未确认，当前采用历史/预期阵容。")
             lines.append(separator)
 
     if skipped_rows:
         lines.append("")
-        lines.append(f"【今日跳过明细】{len(skipped_rows)}场")
-        for index, row in enumerate(skipped_rows, 1):
+        limit = max(1, int(os.getenv("DAILY_SKIP_DETAIL_LIMIT", "10")))
+        ranked_skips = sorted(skipped_rows, key=lambda row: (
+            float(row.get("expected_value") or -1), float(row.get("importance") or 0)), reverse=True)
+        lines.append(f"【高价值但被 Gate 阻止】Top {min(limit, len(ranked_skips))} / {len(skipped_rows)}场")
+        for index, row in enumerate(ranked_skips[:limit], 1):
             event = _event_name(row.get("event") or row.get("event_id") or "未知赛事")
             outcome = row.get("outcome") or "-"
             lines.append(f"[{index}] {event} | {outcome}")
@@ -318,6 +330,15 @@ def format_daily_report(report: dict[str, Any], report_date: date | None = None)
                          f"卡住条件: {reason_text}")
             if str(row.get("lineup_status") or "").upper() == "HISTORICAL":
                 lines.append("    首发未确认，当前采用历史/预期阵容。")
+        remainder = ranked_skips[limit:]
+        if remainder:
+            blockers: dict[str, int] = {}
+            for row in remainder:
+                reason = str(row.get("blocker") or (_key_reasons(row, limit=1) or ["OTHER"])[0])
+                blockers[reason] = blockers.get(reason, 0) + 1
+            summary = " / ".join(f"{key} {value}" for key, value in sorted(
+                blockers.items(), key=lambda item: (-item[1], item[0])))
+            lines.append(f"其余跳过 {len(remainder)} 场：{summary}")
 
     bankroll = report.get("bankroll_usdc")
     paper_daily = report.get("paper_daily") or {}
@@ -349,11 +370,11 @@ def format_daily_report(report: dict[str, Any], report_date: date | None = None)
         v_balance_text = "暂无" if v_balance is None else f"{float(v_balance):.2f} USDC"
         if v_count < 100:
             lines.append(
-                f"【虚拟进度】虚拟第{v_count}场/100场，距真实建议还差{100-v_count}场 | "
+                f"【虚拟进度】虚拟第{v_count}场/100场，距研究验收还差{100-v_count}场 | "
                 f"虚拟ROI: {v_roi_text} | 虚拟余额: {v_balance_text}"
             )
         else:
-            advice_status = "真实建议" if v_roi is not None and float(v_roi) >= 0 else "虚拟下注"
+            advice_status = "研究建议" if v_roi is not None and float(v_roi) >= 0 else "虚拟研究"
             lines.append(
                 f"【虚拟进度】已完成{v_count}场 | 虚拟ROI: {v_roi_text} | "
                 f"当前状态: {advice_status} | 虚拟余额: {v_balance_text}"
@@ -368,6 +389,19 @@ def format_daily_report(report: dict[str, Any], report_date: date | None = None)
             + f"｜CS2近期状态 {data.get('cs2_recent_form', 'UNKNOWN')}"
             + f"｜通知待发 {int(notifications.get('PENDING') or 0)} 失败 {int(notifications.get('FAILED') or 0)}"
             + f"｜LLM {(health.get('llm') or {}).get('status', 'UNKNOWN')}"
+        )
+    audit = report.get("live_monitor_audit") or {}
+    if audit:
+        lines.append(
+            "【实时监控审计】"
+            f"Live matches {int(audit.get('live_matches') or 0)}｜"
+            f"Generated {int(audit.get('alerts_generated') or 0)}｜"
+            f"Sent {int(audit.get('alerts_sent') or 0)}｜"
+            f"Deduped {int(audit.get('deduped') or 0)}｜"
+            f"Flapping suppressed {int(audit.get('flapping_suppressed') or 0)}｜"
+            f"Low-quality suppressed {int(audit.get('low_quality_market_suppressed') or 0)}｜"
+            f"Missing confirmed {int(audit.get('missing_monitor_confirmed') or 0)}｜"
+            f"Recovered {int(audit.get('recovered') or 0)}"
         )
     lines.append(f"【风控状态】{risk_status_text()}")
     return "\n".join(lines).strip()
@@ -384,7 +418,8 @@ def format_paper_betting_summary(summary: dict[str, Any], report_date: str,
         "",
         f"研究本金：{float(bankroll):.2f} USDC",
         f"今日预测：{int(summary.get('predictions', 0))} 场｜"
-        f"虚拟下注：{int(summary.get('bet_candidates', 0))} 场｜"
+        f"下注候选：{int(summary.get('bet_candidates', 0))} 场｜"
+        f"实际虚拟下注：{int(summary.get('virtual_bets', 0))} 场｜"
         f"已结算：{int(summary.get('settled_predictions', 0))} 场",
         f"今日模拟盈亏：{float(summary.get('paper_profit', 0)):+.2f} USDC｜"
         f"ROI：{roi_text(summary.get('paper_roi'))}",
@@ -817,7 +852,7 @@ def _format_prematch_alert(row: dict[str, Any]) -> str:
         lines.append(f"{team_a} {sample_a if sample_a is not None else '暂无'} 局 | "
                      f"{team_b} {sample_b if sample_b is not None else '暂无'} 局")
     bet_status = details.get("bet_status") or "跳过"
-    lines.extend(["", f"【下注状态】{bet_status}（虚拟下注 / 真实建议 / 跳过）"])
+    lines.extend(["", f"【研究状态】{bet_status}（虚拟研究 / 研究建议 / 跳过）"])
     if details.get("real_bet_reason"):
         lines.append(str(details["real_bet_reason"]))
     analyst_count = int(details.get("analyst_count") or 0)

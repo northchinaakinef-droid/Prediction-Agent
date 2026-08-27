@@ -97,7 +97,8 @@ class CoreTests(unittest.TestCase):
         post = format_daily_post({"report_date": "2026-08-14", "recommendations": []})
         FeishuWebhookClient("https://example.invalid/hook", transport=transport).send_post(post)
         self.assertEqual(calls[0][1]["msg_type"], "post")
-        self.assertEqual(calls[0][1]["content"]["post"]["zh_cn"]["title"], "【今日模拟下注】0场")
+        self.assertEqual(calls[0][1]["content"]["post"]["zh_cn"]["title"],
+                         "【今日下注候选】0场｜实际虚拟下注 0场")
 
     def test_feishu_rejects_corrupted_rich_post(self):
         client = FeishuWebhookClient("https://example.invalid/hook", transport=lambda *_args, **_kwargs: {"code": 0})
@@ -106,7 +107,7 @@ class CoreTests(unittest.TestCase):
 
     def test_daily_report_supports_no_bet(self):
         message = format_daily_report({"recommendations": []})
-        self.assertIn("【今日模拟下注】0场", message)
+        self.assertIn("【今日下注候选】0场｜实际虚拟下注 0场", message)
         self.assertIn("【今日跳过】0场", message)
         self.assertIn("【虚拟账户历史回撤】0.0%", message)
         self.assertIn("【风控状态】正常", message)
@@ -117,17 +118,17 @@ class CoreTests(unittest.TestCase):
             "bankroll_usdc": 1100,
             "recommendations": [
                 {"event": "ordinary", "action": "NO_BET", "reasons": ["paper net EV below 5%"]},
-                {"event": "opportunity", "action": "BET", "stake": 5.0,
+                {"event": "opportunity", "action": "BET", "stake": 5.0, "bet_status": "虚拟下注",
                  "model_probability": .6, "market_probability": .55,
                  "expected_value": .08, "lineup_status": "完整"},
             ],
         })
         self.assertIn("opportunity", message)
         self.assertIn("ordinary", message)
-        self.assertIn("【今日跳过明细】1场", message)
+        self.assertIn("【高价值但被 Gate 阻止】Top 1 / 1场", message)
         self.assertIn("EV: 不可比较", message)
         self.assertIn("卡住条件", message)
-        self.assertIn("【今日模拟下注】1场", message)
+        self.assertIn("【今日下注候选】1场｜实际虚拟下注 1场", message)
         self.assertIn("EV: 8.0%", message)
         self.assertIn("阵容状态: 完整", message)
 

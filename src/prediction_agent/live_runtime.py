@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Callable
 from zoneinfo import ZoneInfo
 
-from .entities import canonical_team, normalized_name
+from .entities import canonical_live_match_id, canonical_team, normalized_name
 from .live_engine import LiveAlert, LiveAnalysisEngine, LiveStore, match_key
 from . import nba_analytics
 from .providers.live_data import (
@@ -830,8 +830,11 @@ class LiveSupervisor:
         return alerts
 
     def _watcher_alerts(self, report: dict, states: list, now: datetime) -> list[LiveAlert]:
-        grace = timedelta(minutes=max(5, int(os.getenv("WATCHER_START_GRACE_MINUTES", "10"))))
+        grace = timedelta(seconds=max(0, int(os.getenv("LIVE_START_GRACE_SECONDS", "900"))))
         window = timedelta(minutes=max(30, int(os.getenv("WATCHER_MISSING_WINDOW_MINUTES", "240"))))
+        confirm_miss = max(2, int(os.getenv("LIVE_MONITOR_MISSING_CONFIRM_SCANS", "2")))
+        confirm_recovery = max(2, int(os.getenv("LIVE_MONITOR_RECOVERY_CONFIRM_SCANS", "2")))
+        missing_grace = max(0, int(os.getenv("LIVE_MONITOR_MISSING_GRACE_SECONDS", "600")))
         zone = ZoneInfo(os.getenv("REPORT_TIMEZONE", "Asia/Singapore"))
         active = {match_key(state) for state in states if state.status == "LIVE"}
         finished = {match_key(state) for state in states if state.status == "FINISHED" or state.finished}
@@ -842,30 +845,67 @@ class LiveSupervisor:
                     start = datetime.fromisoformat(str(match["start_time"]).replace("Z", "+00:00"))
                 except (KeyError, ValueError):
                     continue
-                if start + grace <= now <= start + window and str(match.get("event_status", "")).casefold() not in {
-                    "finished", "completed", "post", "final"
+                status = str(match.get("event_status") or match.get("status") or "").casefold()
+                if start + grace <= now <= start + window and status not in {
+                    "finished", "completed", "post", "final", "cancelled", "canceled",
+                    "postponed", "rescheduled", "delayed"
                 }:
-                    teams = sorted((normalized_name(canonical_team(sport, str(match.get("team_a") or ""))),
-                                    normalized_name(canonical_team(sport, str(match.get("team_b") or "")))))
-                    expected[f"{sport}:{teams[0]}:{teams[1]}"] = (sport, match)
+                    key = canonical_live_match_id(sport, str(match.get("team_a") or ""),
+                                                  str(match.get("team_b") or ""))
+                    expected[key] = (sport, match)
         missing = set(expected) - active - finished
         alerts = []
-        for key in sorted(missing - self.missing_watchers):
-            sport, match = expected[key]
-            match_start = datetime.fromisoformat(str(match["start_time"]).replace("Z", "+00:00"))
-            start_display = match_start.astimezone(zone).strftime("%H:%M")
-            summary = (f"比赛预计 {start_display} 已开始，但当前没有活跃监控器；"
-                       "若比赛已结束可忽略本提醒。")
-            alerts.append(LiveAlert(
-                key, sport, "EMERGENCY", 90, "WATCHER_MISSING",
-                f"{match.get('team_a')} vs {match.get('team_b')}",
-                summary, ["已标记为数据不完整，正在持续重试。"], now,
-                f"{key}:WATCHER_MISSING:{match.get('start_time')}",
-            ))
-        for key in sorted(self.missing_watchers - missing):
-            alerts.append(LiveAlert(key, key.split(":", 1)[0], "IMPORTANT", 60, "MONITORING_RECOVERY", key,
-                                    "实时监控已经自动恢复。", [], now, key + ":MONITORING_RECOVERY"))
-        self.missing_watchers = missing
+        tracked = set(expected) | active
+        for key in sorted(tracked):
+            prior = self.store.monitor_state(key) or {"state": "HEALTHY", "miss_scans": 0,
+                                                       "healthy_scans": 0, "first_miss_at": None,
+                                                       "first_healthy_at": None}
+            state_name = str(prior["state"])
+            miss_scans, healthy_scans = int(prior["miss_scans"]), int(prior["healthy_scans"])
+            first_miss, first_healthy = prior.get("first_miss_at"), prior.get("first_healthy_at")
+            if key in missing:
+                miss_scans += 1
+                healthy_scans, first_healthy = 0, None
+                first_miss = first_miss or now.isoformat()
+                elapsed = (now - datetime.fromisoformat(first_miss)).total_seconds()
+                if state_name in {"HEALTHY", "RECOVERING"}:
+                    state_name = "SUSPECT"
+                if state_name == "SUSPECT" and (miss_scans >= confirm_miss or elapsed >= missing_grace):
+                    state_name = "MISSING"
+                    sport, match = expected[key]
+                    start_display = datetime.fromisoformat(str(match["start_time"]).replace(
+                        "Z", "+00:00")).astimezone(zone).strftime("%H:%M")
+                    alerts.append(LiveAlert(
+                        key, sport, "IMPORTANT", 70, "WATCHER_MISSING",
+                        f"{match.get('team_a')} vs {match.get('team_b')}",
+                        f"比赛预计 {start_display} 已开始，连续监测确认没有活跃监控器。",
+                        ["已标记为数据不完整，正在持续重试。"], now,
+                        f"{key}:WATCHER_MISSING", {"monitor_state": "MISSING"},
+                    ))
+                    self.store.audit("missing_monitor_confirmed")
+                elif state_name == "SUSPECT":
+                    self.store.audit("flapping_suppressed")
+            else:
+                miss_scans, first_miss = 0, None
+                if state_name == "MISSING":
+                    state_name, healthy_scans, first_healthy = "RECOVERING", 1, now.isoformat()
+                    self.store.audit("flapping_suppressed")
+                elif state_name == "RECOVERING":
+                    healthy_scans += 1
+                    if healthy_scans >= confirm_recovery:
+                        state_name = "HEALTHY"
+                        alerts.append(LiveAlert(key, key.split(":", 1)[0], "IMPORTANT", 60,
+                                                "MONITORING_RECOVERY", key,
+                                                "实时监控已连续确认恢复。", [], now,
+                                                key + ":MONITORING_RECOVERY",
+                                                {"monitor_state": "HEALTHY"}))
+                        self.store.audit("recovered")
+                else:
+                    state_name, healthy_scans, first_healthy = "HEALTHY", 0, None
+            self.store.save_monitor_state(key, state_name, miss_scans, healthy_scans,
+                                          first_miss, first_healthy, now.isoformat())
+        self.missing_watchers = {key for key in tracked
+                                 if (self.store.monitor_state(key) or {}).get("state") == "MISSING"}
         return alerts
 
     def _attempt(self, name: str, function):
@@ -1273,6 +1313,7 @@ class LiveSupervisor:
         return {
             "checked_at": datetime.now(timezone.utc).isoformat(), "live_matches": len(states),
             "alerts": [row.as_dict() for row in alerts], "source_status": self.source_status,
+            "live_monitor_audit": {"live_matches": len(states), **self.store.audit_snapshot()},
             "watcher_health": {"expected_missing": len(self.missing_watchers),
                                "missing": sorted(self.missing_watchers)},
             "data_incomplete": bool(incomplete), "unavailable_sources": incomplete,

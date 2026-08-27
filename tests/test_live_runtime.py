@@ -304,10 +304,12 @@ class LiveRuntimeTests(unittest.TestCase):
         }]}}}
         with tempfile.TemporaryDirectory() as temp:
             supervisor = LiveSupervisor(root=Path(temp))
-            missing = supervisor._watcher_alerts(report, [], now)
+            self.assertEqual(supervisor._watcher_alerts(report, [], now), [])
+            missing = supervisor._watcher_alerts(report, [], now + timedelta(minutes=5))
             self.assertEqual(missing[0].category, "WATCHER_MISSING")
             live = LiveState("nba", "1", "nba", now, "LIVE", "Lakers", "Celtics")
-            recovered = supervisor._watcher_alerts(report, [live], now)
+            self.assertEqual(supervisor._watcher_alerts(report, [live], now + timedelta(minutes=10)), [])
+            recovered = supervisor._watcher_alerts(report, [live], now + timedelta(minutes=15))
         self.assertEqual(recovered[0].category, "MONITORING_RECOVERY")
 
 

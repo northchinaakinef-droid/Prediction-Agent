@@ -50,7 +50,7 @@ class BettingGateTests(unittest.TestCase):
             ok, reason = can_place_real_bet(match, db)
             self.assertFalse(ok)
             self.assertIn("虚拟第0场/100场", reason)
-            self.assertIn("距真实建议还差100场", reason)
+            self.assertIn("距研究验收还差100场", reason)
 
     def test_real_advice_upgrades_at_100_settled_bets_with_nonnegative_roi(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -69,7 +69,7 @@ class BettingGateTests(unittest.TestCase):
             }
             ok, reason = can_place_real_bet(match, db)
         self.assertTrue(ok, reason)
-        self.assertIn("升级为真实建议", reason)
+        self.assertIn("升级为研究建议", reason)
 
     def test_real_advice_stays_virtual_when_100_bet_roi_is_negative(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -215,7 +215,7 @@ class DeliveryReformTests(unittest.TestCase):
         self.assertIn("上路：Zeus", text)
         self.assertIn("【近期状态】", text)
         self.assertIn("【版本关键英雄覆盖】", text)
-        self.assertIn("【下注状态】虚拟下注", text)
+        self.assertIn("【研究状态】虚拟下注", text)
 
     def test_daily_report_marks_virtual_bet_status(self):
         report = {
@@ -234,8 +234,8 @@ class DeliveryReformTests(unittest.TestCase):
             "virtual_betting": {"count": 12, "roi": 0.03, "balance": 10030.0},
         }
         text = format_daily_report(report)
-        self.assertIn("【虚拟下注】", text)
-        self.assertIn("虚拟第12场/100场，距真实建议还差88场", text)
+        self.assertIn("【虚拟研究】", text)
+        self.assertIn("虚拟第12场/100场，距研究验收还差88场", text)
         self.assertIn("【今日赛程】实际场次 3 场", text)
 
 

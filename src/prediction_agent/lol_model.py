@@ -256,7 +256,7 @@ def evaluate_periods(games: Iterable[LolGame], *, train_end: int,
         "train_samples": len(train), "validation": val_metrics, "final_test": test_metrics,
         "approved_for_probability_use": approved,
         "approved_for_real_money": False,
-        "note": "真实建议展示状态由已结算虚拟场次与虚拟 ROI 规则计算。",
+        "note": "研究建议展示状态由已结算虚拟场次与虚拟 ROI 规则计算。",
     }
 
 
