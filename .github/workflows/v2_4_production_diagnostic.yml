@@ -52,7 +52,7 @@ jobs:
           from pathlib import Path
 
           DEPLOYED_AT = "2026-08-27T11:39:03+00:00"
-          EXPECTED_RELEASE = "b9b9c49b7d779e58c706005d39c806b43195a0d5"
+          EXPECTED_RELEASE = "08a035588b3bc41db9962b9417c55ea4aab01aaf"
           EXPECTED_HASHES = {
               "src/prediction_agent/context.py": "9d404f992737489d8a18d46886c8544d92ec942265981ed202e6bbf452858381",
               "src/prediction_agent/ai/validator.py": "340fb2d6c4d2bbd2e861fcbd823dfba8a650956c973fbe42d0e7ced89376bcae",
@@ -235,12 +235,18 @@ jobs:
                        and render["has_research_wording"])
           integrity_ok = all(result["core_integrity"].values())
           flapping_ok = not result["flapping_match_ids"]
-          passed = flags_ok and health_ok and market_ok and render_ok and integrity_ok and flapping_ok
+          data_health_ok = (result["cs2_recent_form_health"] == "OK"
+                            and result["lol_roster_health"] == "OK (HISTORICAL)")
+          base_passed = flags_ok and health_ok and market_ok and render_ok and integrity_ok and flapping_ok and data_health_ok
+          natural_market_sample = sum(result["market_quality"].values()) > 0
+          sample_pending = base_passed and not natural_market_sample
+          status = ("V2_4_PRODUCTION_VALIDATED_WITH_SAMPLE_PENDING" if sample_pending else
+                    "V2_4_PRODUCTION_VALIDATED" if base_passed else "V2_4_PRODUCTION_VALIDATION_FAILED")
           rate = audit["suppression_rate"]
           rate_text = "N/A" if rate is None else f"{rate:.1%}"
           lines = [
               "# V2.4 Production Diagnostic Report", "",
-              f"Final status: **{'V2_4_PRODUCTION_VALIDATED' if passed else 'V2_4_PRODUCTION_VALIDATION_FAILED'}**", "",
+              f"Final status: **{status}**", "",
               "## Safety and health", "",
               f"- REAL_TRADING_DISABLED: `{result['safety_flags']['REAL_TRADING_DISABLED']}`",
               f"- LLM_SHADOW_MODE: `{result['safety_flags']['LLM_SHADOW_MODE']}`",
@@ -266,6 +272,8 @@ jobs:
               f"- Market quality: `{result['market_quality']}`",
               f"- Anomaly types: `{result['anomaly_types']}`",
               f"- High-priority poor-market alerts: **{result['priority_bad_market_alerts']}**",
+              f"- Natural market-quality sample observed: **{natural_market_sample}**",
+              f"- Sample state: **{'PRODUCTION_SAMPLE_PENDING' if not natural_market_sample else 'OBSERVED'}**",
               f"- Feishu forbidden wording absent: **{not render['forbidden_terms']}**",
               f"- Candidate/actual virtual bet wording correct: **{render_ok}**", "",
               "## Core integrity", "",
@@ -280,19 +288,18 @@ jobs:
               f"5. Low-quality suppressed: **{audit['low_quality_market_suppressed']}**",
               f"6. Suppression rate: **{rate_text}**",
               f"7. Obvious Missing/Recovery repetition: **{not flapping_ok}**",
-              f"8. Untradeable markets correctly downgraded: **{market_ok}**",
+              f"8. Untradeable markets correctly downgraded: **{market_ok if natural_market_sample else 'PRODUCTION_SAMPLE_PENDING'}**",
               f"9. Misleading real-money wording removed: **{not render['forbidden_terms']}**",
               f"10. Candidate/actual wording correct: **{render_ok}**",
               f"11. Core logic unchanged: **{integrity_ok}**",
-              f"12. Production can continue without changes: **{passed}**", "",
-              f"`{'V2_4_PRODUCTION_VALIDATED' if passed else 'V2_4_PRODUCTION_VALIDATION_FAILED'}`",
+              f"12. Production can continue without changes: **{base_passed}**", "",
+              f"`{status}`",
           ]
           report = "\n".join(lines) + "\n"
           Path("V2_4_PRODUCTION_DIAGNOSTIC_REPORT.md").write_text(report, encoding="utf-8")
-          Path("v2_4_status.txt").write_text("PASS" if passed else "FAIL", encoding="utf-8")
+          Path("v2_4_status.txt").write_text("PASS" if base_passed else "FAIL", encoding="utf-8")
           Path(sys.argv[1]).write_text(json.dumps({
-              "passed": passed, "status": "V2_4_PRODUCTION_VALIDATED" if passed else
-              "V2_4_PRODUCTION_VALIDATION_FAILED"
+              "passed": base_passed, "status": status
           }), encoding="utf-8")
           PY
           cat V2_4_PRODUCTION_DIAGNOSTIC_REPORT.md >> "$GITHUB_STEP_SUMMARY"
