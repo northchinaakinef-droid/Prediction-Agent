@@ -73,3 +73,27 @@ def canonical_team(sport: str, name: str) -> str:
     if sport == "lol":
         return resolve_team(sport, cleaned)[0]
     return cleaned
+
+
+def canonical_live_match_id(
+    sport: str, team_a: str, team_b: str, *, provider_event_id: str | None = None,
+    reconciled_event_id: str | None = None, tournament: str | None = None,
+    scheduled_start: str | None = None,
+) -> str:
+    """Return an order-independent live identity, preferring reconciled stable IDs.
+
+    Provider IDs are namespaced because unrelated providers may reuse numeric IDs.
+    Callers should pass a reconciled ID when schedule ingestion has linked providers.
+    The contextual fallback deliberately keeps tournaments and team tiers isolated.
+    """
+    sport_key = normalized_name(sport)
+    if reconciled_event_id:
+        return f"{sport_key}:event:{normalized_name(str(reconciled_event_id))}"
+    if provider_event_id:
+        return f"{sport_key}:provider:{normalized_name(str(provider_event_id))}"
+    teams = sorted((normalized_name(canonical_team(sport, team_a)),
+                    normalized_name(canonical_team(sport, team_b))))
+    context = normalized_name(tournament or "")
+    start = normalized_name(str(scheduled_start or ""))
+    suffix = ":".join(value for value in (context, start) if value)
+    return f"{sport_key}:{teams[0]}:{teams[1]}" + (f":{suffix}" if suffix else "")

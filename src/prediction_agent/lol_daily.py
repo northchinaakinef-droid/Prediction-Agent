@@ -133,7 +133,7 @@ def build_lol_report(model: EloModel, evaluation: dict, events: list[dict], *,
             "daily_committed_fraction": ledger.daily_committed,
         },
         "risk_notes": [
-            "真实建议展示状态由统一 daily 流程按虚拟场次与虚拟 ROI 规则计算",
+            "研究建议展示状态由统一 daily 流程按虚拟场次与虚拟 ROI 规则计算",
             "临场阵容、首发或突发换人缺失时应降低置信度或 NO BET",
         ],
     }

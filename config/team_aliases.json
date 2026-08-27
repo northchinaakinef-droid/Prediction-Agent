@@ -248,6 +248,22 @@
     "region": "APAC"
   },
   {
+    "sport": "lol", "team_id": "HYP", "canonical_name": "Hyperion",
+    "aliases": ["Hyperion (Portuguese Team)"], "league": "LPLol", "region": "PT"
+  },
+  {
+    "sport": "lol", "team_id": "GAL", "canonical_name": "Galions",
+    "aliases": ["GAL"], "league": "LFL", "region": "EU"
+  },
+  {
+    "sport": "lol", "team_id": "TLNP", "canonical_name": "TLN Pirates",
+    "aliases": ["TLNP"], "league": "LCP", "region": "APAC"
+  },
+  {
+    "sport": "lol", "team_id": "BFX", "canonical_name": "BNK FEARX",
+    "aliases": ["BFX"], "league": "LCK", "region": "KR"
+  },
+  {
     "sport": "cs2",
     "team_id": "NIP",
     "canonical_name": "Ninjas in Pyjamas",

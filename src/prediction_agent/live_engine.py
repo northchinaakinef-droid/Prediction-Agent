@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .entities import canonical_team, normalized_name
+from .entities import canonical_live_match_id, canonical_team, normalized_name
 from .providers.live_data import LiveState
 from .providers.polymarket import PolymarketClient
 
@@ -229,7 +229,40 @@ class LiveStore:
               alert_json TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS live_alert_dedupe ON live_alerts(dedupe_key, observed_at);
+            CREATE TABLE IF NOT EXISTS live_monitor_state (
+              match_key TEXT PRIMARY KEY, state TEXT NOT NULL, miss_scans INTEGER NOT NULL DEFAULT 0,
+              healthy_scans INTEGER NOT NULL DEFAULT 0, first_miss_at TEXT, first_healthy_at TEXT,
+              updated_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS live_alert_audit (
+              metric TEXT PRIMARY KEY, count INTEGER NOT NULL DEFAULT 0
+            );
             """)
+
+    def monitor_state(self, match_key: str) -> dict | None:
+        with self.connect() as db:
+            row = db.execute("SELECT * FROM live_monitor_state WHERE match_key=?", (match_key,)).fetchone()
+        return dict(row) if row else None
+
+    def save_monitor_state(self, match_key: str, state: str, miss_scans: int, healthy_scans: int,
+                           first_miss_at: str | None, first_healthy_at: str | None,
+                           updated_at: str) -> None:
+        with self.connect() as db:
+            db.execute("""INSERT INTO live_monitor_state VALUES(?,?,?,?,?,?,?)
+                ON CONFLICT(match_key) DO UPDATE SET state=excluded.state, miss_scans=excluded.miss_scans,
+                healthy_scans=excluded.healthy_scans, first_miss_at=excluded.first_miss_at,
+                first_healthy_at=excluded.first_healthy_at, updated_at=excluded.updated_at""",
+                (match_key, state, miss_scans, healthy_scans, first_miss_at, first_healthy_at, updated_at))
+
+    def audit(self, metric: str, amount: int = 1) -> None:
+        with self.connect() as db:
+            db.execute("""INSERT INTO live_alert_audit(metric,count) VALUES(?,?)
+                ON CONFLICT(metric) DO UPDATE SET count=count+excluded.count""", (metric, amount))
+
+    def audit_snapshot(self) -> dict[str, int]:
+        with self.connect() as db:
+            rows = db.execute("SELECT metric,count FROM live_alert_audit").fetchall()
+        return {str(row["metric"]): int(row["count"]) for row in rows}
 
     def previous(self, match_key: str) -> dict | None:
         with self.connect() as db:
@@ -325,9 +358,30 @@ class LiveStore:
 
 
 def match_key(state: LiveState) -> str:
-    teams = sorted((normalized_name(canonical_team(state.sport, state.team_a)),
-                    normalized_name(canonical_team(state.sport, state.team_b))))
-    return f"{state.sport}:{teams[0]}:{teams[1]}"
+    return canonical_live_match_id(
+        state.sport, state.team_a, state.team_b,
+        reconciled_event_id=state.features.get("reconciled_event_id"),
+        tournament=state.features.get("tournament"),
+        scheduled_start=state.features.get("scheduled_start"),
+    )
+
+
+def market_alert_quality(market: MarketState, *, max_spread: float = .03,
+                         min_liquidity: float = 100.0, stale_seconds: int = 900) -> tuple[str, str]:
+    age = max(0.0, (datetime.now(timezone.utc) - market.observed_at).total_seconds())
+    if not market.available or market.best_bid is None or market.best_ask is None:
+        return "UNTRADEABLE", "市场不可交易：缺少有效买卖价"
+    if market.best_bid < 0 or market.best_ask > 1 or market.best_bid >= market.best_ask:
+        return "UNTRADEABLE", "市场不可交易：执行价格无效"
+    if age > stale_seconds:
+        return "STALE", "市场价格陈旧"
+    if market.spread is not None and market.spread > max_spread * 3:
+        return "UNTRADEABLE", "市场不可交易：买卖价差过大"
+    if market.spread is not None and market.spread > max_spread:
+        return "WIDE_SPREAD", "市场质量异常：买卖价差过大"
+    if float(market.depth or 0) < min_liquidity or float(market.volume or 0) < min_liquidity:
+        return "LOW_LIQUIDITY", "市场流动性过低"
+    return "GOOD", "市场质量正常"
 
 
 class AlertEngine:
@@ -356,17 +410,26 @@ class AlertEngine:
         key_events.extend(state.key_events)
         previous_volume = float(previous.get("_market", {}).get("volume") or 0) if previous else 0
         volume_change = max(0.0, float(market.volume or 0) - previous_volume)
-        liquidity_weight = (8 if market.spread is not None and market.spread >= .08 else 0) + (
-            10 if previous_volume and volume_change / previous_volume >= .5 else 0)
+        quality, quality_reason = market_alert_quality(market)
+        liquidity_weight = 10 if previous_volume and volume_change / previous_volume >= .5 else 0
         score = min(100.0, probability_move * 300 + market_move * 220 + divergence * 120 +
                     objective_weight + news_weight + liquidity_weight)
         if score < 30:
             return None
         severity = "EMERGENCY" if score >= 80 else "IMPORTANT" if score >= 60 else "OBSERVE"
+        anomaly_classification = ("MARKET_MICROSTRUCTURE_ANOMALY" if quality in {"UNTRADEABLE", "WIDE_SPREAD"}
+                                  else "LOW_LIQUIDITY_NOISE" if quality == "LOW_LIQUIDITY"
+                                  else "PRICE_STALE" if quality == "STALE"
+                                  else "MODEL_MARKET_DIVERGENCE" if divergence >= .12
+                                  else "LIVE_STATE_DIVERGENCE")
+        if quality == "UNTRADEABLE":
+            severity, score = "OBSERVE", min(score, 39)
+        elif quality in {"LOW_LIQUIDITY", "WIDE_SPREAD", "STALE"}:
+            severity, score = "OBSERVE", min(score, 49)
         category = ("NEWS_ALERT" if news_weight >= 25 else "MARKET_ANOMALY" if divergence >= .12 else
                     "MAJOR_EVENT" if objective_weight >= 15 else "PROBABILITY_CHANGE")
         key = match_key(state)
-        reasons = list(probability.reasons)
+        reasons = ([quality_reason] if quality != "GOOD" else []) + list(probability.reasons)
         if market.probability_a is not None:
             reasons.append(f"model-market divergence {probability.current_probability-market.probability_a:+.1%}")
             reasons.append(f"market move since prior snapshot {market_move:+.1%}; spread " +
@@ -378,7 +441,8 @@ class AlertEngine:
             key, state.sport, severity, score, category, f"{state.team_a} vs {state.team_b}",
             f"model {probability.pre_match_probability:.1%} -> {probability.current_probability:.1%}; market " +
             (f"{market.probability_a:.1%}" if market.probability_a is not None else "unavailable"),
-            reasons, state.observed_at, f"{key}:{category}",
+            reasons, state.observed_at, f"{key}:{category}:{severity}:{anomaly_classification}",
+            {"market_quality": quality, "anomaly_classification": anomaly_classification},
         )
 
 
@@ -402,5 +466,14 @@ class LiveAnalysisEngine:
             alerts_enabled = alert_sports is None or state.sport in alert_sports
             if alert and alerts_enabled and not self.store.alert_recent(alert.dedupe_key, 10 * 60):
                 self.store.save_alert(alert)
+                self.store.audit("alerts_sent")
                 emitted.append(alert)
+            elif alert and alerts_enabled:
+                self.store.audit("deduped")
+            if alert:
+                self.store.audit("alerts_generated")
+                if (alert.details or {}).get("market_quality") in {
+                    "UNTRADEABLE", "LOW_LIQUIDITY", "WIDE_SPREAD", "STALE"
+                }:
+                    self.store.audit("low_quality_market_suppressed")
         return emitted
