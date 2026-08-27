@@ -65,7 +65,7 @@ jobs:
           flags = {name: os.getenv(name, "UNSET").lower() for name in (
               "REAL_TRADING_DISABLED", "LLM_SHADOW_MODE", "PROVIDER_INGESTION_SHADOW"
           )}
-          release = (root / "RELEASE_GIT_SHA").read_text(encoding="utf-8").strip()
+          release = os.getenv("DIAG_RELEASE_SHA", "unknown")
           response = urllib.request.urlopen("http://127.0.0.1:8080/health", timeout=5)
           http_status = response.status
           health = json.load(response)
@@ -207,7 +207,7 @@ jobs:
           PROD_USER: ${{ secrets.PROD_USER }}
         run: |
           ssh -i ~/.ssh/production_diagnostic_key -o BatchMode=yes "$PROD_USER@$PROD_HOST" \
-            'cd /opt/prediction-agent && container=$(sudo docker compose ps -q prediction-agent) && health=$(sudo docker inspect "$container" --format "{{.State.Health.Status}}") && sudo docker compose exec -T -e PYTHONDONTWRITEBYTECODE=1 -e DIAG_CONTAINER_HEALTH="$health" prediction-agent python -' \
+            'cd /opt/prediction-agent && container=$(sudo docker compose ps -q prediction-agent) && health=$(sudo docker inspect "$container" --format "{{.State.Health.Status}}") && release=$(cat RELEASE_GIT_SHA) && sudo docker compose exec -T -e PYTHONDONTWRITEBYTECODE=1 -e DIAG_CONTAINER_HEALTH="$health" -e DIAG_RELEASE_SHA="$release" prediction-agent python -' \
             < "$RUNNER_TEMP/v2_4_probe.py" > "$RUNNER_TEMP/v2_4_result.json"
           python -m json.tool "$RUNNER_TEMP/v2_4_result.json" > /dev/null
 
