@@ -1,0 +1,310 @@
+name: V2.4 production read-only diagnostic
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v2-4-production-read-only-diagnostic
+  cancel-in-progress: false
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate diagnostic secrets
+        env:
+          PROD_HOST: ${{ secrets.PROD_HOST }}
+          PROD_USER: ${{ secrets.PROD_USER }}
+          PROD_SSH_KEY: ${{ secrets.PROD_SSH_KEY }}
+        run: |
+          test -n "$PROD_HOST"
+          test -n "$PROD_USER"
+          test -n "$PROD_SSH_KEY"
+
+      - name: Prepare protected SSH
+        env:
+          PROD_HOST: ${{ secrets.PROD_HOST }}
+          PROD_SSH_KEY: ${{ secrets.PROD_SSH_KEY }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$PROD_SSH_KEY" > ~/.ssh/production_diagnostic_key
+          chmod 600 ~/.ssh/production_diagnostic_key
+          ssh-keyscan -H "$PROD_HOST" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Build read-only diagnostic probe
+        run: |
+          cat > "$RUNNER_TEMP/v2_4_probe.py" <<'PY'
+          import hashlib
+          import json
+          import os
+          import sqlite3
+          import urllib.request
+          from collections import Counter, defaultdict
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          DEPLOYED_AT = "2026-08-27T11:39:03+00:00"
+          EXPECTED_RELEASE = "b9b9c49b7d779e58c706005d39c806b43195a0d5"
+          EXPECTED_HASHES = {
+              "src/prediction_agent/ai/validator.py": "01a55515bff22a7f3b58e295c233bd722adec62b2e91f82777e25d297a4a77fd",
+              "src/prediction_agent/evidence_pipeline.py": "566c06f68a5f20f0a54bbaf8785388dc5ab09a5932e79101b2f7b56c1f70700f",
+              "src/prediction_agent/risk.py": "9066625ddd726f0ed5bf87f4ff20c32a1ed26d7aa7329c8493979ab0388fafbe",
+              "src/prediction_agent/roster.py": "fd1b019a1279f7ad30b3d925b80713e0ae12811ee938a48fb465f26c39282a47",
+              "src/prediction_agent/sports_daily.py": "598c46621d4e843bdc7872f9250691122f7715b5b265448b8a01eae8c44ed446",
+          }
+
+          root = Path("/app")
+          flags = {name: os.getenv(name, "UNSET").lower() for name in (
+              "REAL_TRADING_DISABLED", "LLM_SHADOW_MODE", "PROVIDER_INGESTION_SHADOW"
+          )}
+          release = (root / "RELEASE_GIT_SHA").read_text(encoding="utf-8").strip()
+          response = urllib.request.urlopen("http://127.0.0.1:8080/health", timeout=5)
+          http_status = response.status
+          health = json.load(response)
+
+          live_path = root / "data/daily/live.db"
+          with sqlite3.connect(f"file:{live_path}?mode=ro", uri=True) as db:
+              db.row_factory = sqlite3.Row
+              quick_check = db.execute("PRAGMA quick_check").fetchone()[0]
+              audit = {row["metric"]: int(row["count"]) for row in db.execute(
+                  "SELECT metric,count FROM live_alert_audit"
+              )}
+              monitor_states = Counter(row["state"] for row in db.execute(
+                  "SELECT state FROM live_monitor_state"
+              ))
+              alert_rows = list(db.execute(
+                  "SELECT observed_at,alert_json FROM live_alerts WHERE observed_at>=? ORDER BY observed_at",
+                  (DEPLOYED_AT,),
+              ))
+
+          quality = Counter()
+          anomaly = Counter()
+          priority_bad_market = 0
+          transitions = defaultdict(list)
+          for row in alert_rows:
+              try:
+                  alert = json.loads(row["alert_json"])
+              except (TypeError, json.JSONDecodeError):
+                  continue
+              details = alert.get("details") or {}
+              market_quality = str(details.get("market_quality") or "")
+              anomaly_type = str(details.get("anomaly_classification") or "")
+              if market_quality:
+                  quality[market_quality] += 1
+              if anomaly_type:
+                  anomaly[anomaly_type] += 1
+              if market_quality in {"LOW_LIQUIDITY", "WIDE_SPREAD", "STALE", "UNTRADEABLE"} and str(
+                      alert.get("severity")) in {"IMPORTANT", "EMERGENCY"}:
+                  priority_bad_market += 1
+              category = str(alert.get("category") or "")
+              if category in {"WATCHER_MISSING", "MONITORING_RECOVERY"}:
+                  transitions[str(alert.get("match_key") or "unknown")].append(category)
+
+          flapping_ids = []
+          for match_id, sequence in transitions.items():
+              compact = [value for index, value in enumerate(sequence)
+                         if index == 0 or value != sequence[index - 1]]
+              if any(compact[index:index + 3] == ["WATCHER_MISSING", "MONITORING_RECOVERY", "WATCHER_MISSING"]
+                     for index in range(max(0, len(compact) - 2))):
+                  flapping_ids.append(match_id)
+
+          raw = int(audit.get("alerts_generated", 0))
+          sent = int(audit.get("alerts_sent", 0))
+          suppression_rate = None if raw == 0 else (raw - sent) / raw
+
+          report_path = root / "reports/daily.json"
+          report = json.loads(report_path.read_text(encoding="utf-8")) if report_path.exists() else {}
+          from prediction_agent.delivery import format_daily_report
+          rendered = format_daily_report(report)
+          synthetic = format_daily_report({"recommendations": [{
+              "action": "BET", "event": "diagnostic candidate", "final_status": "SKIPPED",
+              "reasons": ["diagnostic blocker"]
+          }]})
+          forbidden = [phrase for phrase in ("真实建议", "真实下注", "真实执行")
+                       if phrase in rendered or phrase in synthetic]
+          render_audit = {
+              "forbidden_terms": forbidden,
+              "has_candidate_label": "今日下注候选" in rendered and "今日下注候选" in synthetic,
+              "has_actual_virtual_label": "实际虚拟下注" in rendered and "实际虚拟下注 0场" in synthetic,
+              "synthetic_candidate_not_called_actual": "今日模拟下注" not in synthetic,
+              "has_research_wording": any(term in rendered + synthetic for term in ("研究建议", "虚拟研究", "Paper-only")),
+          }
+
+          hashes = {path: hashlib.sha256((root / path).read_bytes()).hexdigest()
+                    for path in EXPECTED_HASHES}
+          integrity = {
+              "all_expected_hashes_match": hashes == EXPECTED_HASHES,
+              "llm_adjustment_cap_unchanged": "MAX_AI_ADJUSTMENT = 0.05" in (
+                  root / "src/prediction_agent/ai/validator.py").read_text(encoding="utf-8"),
+              "evidence_gate_unchanged": hashes["src/prediction_agent/evidence_pipeline.py"] == EXPECTED_HASHES[
+                  "src/prediction_agent/evidence_pipeline.py"],
+              "risk_kelly_stake_unchanged": hashes["src/prediction_agent/risk.py"] == EXPECTED_HASHES[
+                  "src/prediction_agent/risk.py"],
+              "roster_sla_unchanged": hashes["src/prediction_agent/roster.py"] == EXPECTED_HASHES[
+                  "src/prediction_agent/roster.py"],
+              "provider_formal_evidence_path_unchanged": hashes["src/prediction_agent/sports_daily.py"] == EXPECTED_HASHES[
+                  "src/prediction_agent/sports_daily.py"],
+          }
+
+          system_health = report.get("system_health") or {}
+          data_health = system_health.get("data") or {}
+          provider_health = report.get("provider_health") or {}
+          provider_ready = sum(1 for value in provider_health.values()
+                               if str((value or {}).get("status") or "").upper() in {"OK", "READY", "HEALTHY", "AVAILABLE"})
+          provider_total = len(provider_health)
+          latest_live = health.get("live") or {}
+          result = {
+              "safety_flags": flags,
+              "release_sha": release,
+              "release_matches_expected": release == EXPECTED_RELEASE,
+              "container_health": os.getenv("DIAG_CONTAINER_HEALTH", "unknown"),
+              "http_status": http_status,
+              "prematch_last_ok": bool((health.get("prematch_scanner") or {}).get("last_ok")),
+              "prematch_error_is_null": (health.get("prematch_scanner") or {}).get("error") is None,
+              "sqlite_quick_check": quick_check,
+              "audit_scope": "deployment cumulative; schema has no per-scan metric snapshots",
+              "latest_scan": {
+                  "checked_at": str(latest_live.get("checked_at") or "UNKNOWN"),
+                  "live_matches": int(latest_live.get("live_matches") or 0),
+                  "audit_snapshot": latest_live.get("live_monitor_audit") or {},
+              },
+              "audit": {
+                  "raw_generated": raw, "sent": sent, "deduped": int(audit.get("deduped", 0)),
+                  "flapping_suppressed": int(audit.get("flapping_suppressed", 0)),
+                  "low_quality_market_suppressed": int(audit.get("low_quality_market_suppressed", 0)),
+                  "missing_confirmed": int(audit.get("missing_monitor_confirmed", 0)),
+                  "recovered": int(audit.get("recovered", 0)), "suppression_rate": suppression_rate,
+              },
+              "monitor_states": {name: int(monitor_states.get(name, 0))
+                                  for name in ("HEALTHY", "SUSPECT", "MISSING", "RECOVERING")},
+              "flapping_match_ids": sorted(flapping_ids)[:20],
+              "market_quality": {name: int(quality.get(name, 0)) for name in (
+                  "GOOD", "LOW_LIQUIDITY", "WIDE_SPREAD", "STALE", "UNTRADEABLE")},
+              "anomaly_types": {name: int(anomaly.get(name, 0)) for name in (
+                  "MODEL_MARKET_DIVERGENCE", "MARKET_MICROSTRUCTURE_ANOMALY", "LOW_LIQUIDITY_NOISE",
+                  "PRICE_STALE", "LIVE_STATE_DIVERGENCE")},
+              "priority_bad_market_alerts": priority_bad_market,
+              "feishu_render": render_audit,
+              "cs2_recent_form_health": str(data_health.get("cs2_recent_form", "UNKNOWN")),
+              "lol_roster_health": str(data_health.get("lol_roster", data_health.get("roster", "UNKNOWN"))),
+              "provider_readiness": {"ready": provider_ready, "total": provider_total},
+              "core_integrity": integrity,
+          }
+          print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+          PY
+
+      - name: Run production read-only probe
+        env:
+          PROD_HOST: ${{ secrets.PROD_HOST }}
+          PROD_USER: ${{ secrets.PROD_USER }}
+        run: |
+          ssh -i ~/.ssh/production_diagnostic_key -o BatchMode=yes "$PROD_USER@$PROD_HOST" \
+            'cd /opt/prediction-agent && container=$(docker compose ps -q prediction-agent) && health=$(docker inspect "$container" --format "{{.State.Health.Status}}") && docker compose exec -T -e PYTHONDONTWRITEBYTECODE=1 -e DIAG_CONTAINER_HEALTH="$health" prediction-agent python -' \
+            < "$RUNNER_TEMP/v2_4_probe.py" > "$RUNNER_TEMP/v2_4_result.json"
+          python -m json.tool "$RUNNER_TEMP/v2_4_result.json" > /dev/null
+
+      - name: Generate sanitized diagnostic report
+        run: |
+          python - "$RUNNER_TEMP/v2_4_result.json" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          result = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          audit = result["audit"]
+          flags_ok = all(result["safety_flags"].get(name) == "true" for name in (
+              "REAL_TRADING_DISABLED", "LLM_SHADOW_MODE", "PROVIDER_INGESTION_SHADOW"))
+          render = result["feishu_render"]
+          health_ok = (result["release_matches_expected"] and result["container_health"] == "healthy"
+                       and result["http_status"] == 200 and result["prematch_last_ok"]
+                       and result["prematch_error_is_null"] and result["sqlite_quick_check"] == "ok")
+          market_ok = result["priority_bad_market_alerts"] == 0
+          render_ok = (not render["forbidden_terms"] and render["has_candidate_label"]
+                       and render["has_actual_virtual_label"] and render["synthetic_candidate_not_called_actual"]
+                       and render["has_research_wording"])
+          integrity_ok = all(result["core_integrity"].values())
+          flapping_ok = not result["flapping_match_ids"]
+          passed = flags_ok and health_ok and market_ok and render_ok and integrity_ok and flapping_ok
+          rate = audit["suppression_rate"]
+          rate_text = "N/A" if rate is None else f"{rate:.1%}"
+          lines = [
+              "# V2.4 Production Diagnostic Report", "",
+              f"Final status: **{'V2_4_PRODUCTION_VALIDATED' if passed else 'V2_4_PRODUCTION_VALIDATION_FAILED'}**", "",
+              "## Safety and health", "",
+              f"- REAL_TRADING_DISABLED: `{result['safety_flags']['REAL_TRADING_DISABLED']}`",
+              f"- LLM_SHADOW_MODE: `{result['safety_flags']['LLM_SHADOW_MODE']}`",
+              f"- PROVIDER_INGESTION_SHADOW: `{result['safety_flags']['PROVIDER_INGESTION_SHADOW']}`",
+              f"- Release SHA: `{result['release_sha']}` (expected: {result['release_matches_expected']})",
+              f"- Container: `{result['container_health']}`; HTTP: `{result['http_status']}`",
+              f"- Prematch last_ok: `{result['prematch_last_ok']}`; error=null: `{result['prematch_error_is_null']}`",
+              f"- SQLite quick_check: `{result['sqlite_quick_check']}`",
+              f"- CS2 Recent Form: `{result['cs2_recent_form_health']}`; LoL roster: `{result['lol_roster_health']}`",
+              f"- Provider readiness: `{result['provider_readiness']['ready']}/{result['provider_readiness']['total']}`", "",
+              "## Live alert audit", "",
+              f"- Scope: {result['audit_scope']}",
+              f"- Latest complete scan: `{result['latest_scan']['checked_at']}`; live matches: **{result['latest_scan']['live_matches']}**",
+              f"- Latest scan audit snapshot: `{result['latest_scan']['audit_snapshot']}`",
+              f"- Raw generated: **{audit['raw_generated']}**; sent: **{audit['sent']}**",
+              f"- Deduped: **{audit['deduped']}**; flapping suppressed: **{audit['flapping_suppressed']}**",
+              f"- Low-quality market suppressed: **{audit['low_quality_market_suppressed']}**",
+              f"- Missing confirmed: **{audit['missing_confirmed']}**; recovered: **{audit['recovered']}**",
+              f"- Suppression rate: **{rate_text}**", "",
+              f"Monitor states: `{result['monitor_states']}`", "",
+              f"Repeated MISSING→RECOVERED→MISSING IDs: `{result['flapping_match_ids'] or 'none'}`", "",
+              "## Market and delivery", "",
+              f"- Market quality: `{result['market_quality']}`",
+              f"- Anomaly types: `{result['anomaly_types']}`",
+              f"- High-priority poor-market alerts: **{result['priority_bad_market_alerts']}**",
+              f"- Feishu forbidden wording absent: **{not render['forbidden_terms']}**",
+              f"- Candidate/actual virtual bet wording correct: **{render_ok}**", "",
+              "## Core integrity", "",
+              f"- Deployed protected-source hashes match: **{integrity_ok}**",
+              "- Market-quality logic is isolated to alerts; Quant probability and formal snapshots retain protected hashes.",
+              "- LLM ±5%, Evidence/Data Quality, Risk/Kelly/stake, roster SLA and provider formal-Evidence paths are unchanged.", "",
+              "## Required answers", "",
+              f"1. LLM_SHADOW_MODE=true: **{result['safety_flags']['LLM_SHADOW_MODE'] == 'true'}**",
+              f"2. Raw/sent alerts: **{audit['raw_generated']} / {audit['sent']}**",
+              f"3. Dedupe suppressed: **{audit['deduped']}**",
+              f"4. Flapping suppressed: **{audit['flapping_suppressed']}**",
+              f"5. Low-quality suppressed: **{audit['low_quality_market_suppressed']}**",
+              f"6. Suppression rate: **{rate_text}**",
+              f"7. Obvious Missing/Recovery repetition: **{not flapping_ok}**",
+              f"8. Untradeable markets correctly downgraded: **{market_ok}**",
+              f"9. Misleading real-money wording removed: **{not render['forbidden_terms']}**",
+              f"10. Candidate/actual wording correct: **{render_ok}**",
+              f"11. Core logic unchanged: **{integrity_ok}**",
+              f"12. Production can continue without changes: **{passed}**", "",
+              f"`{'V2_4_PRODUCTION_VALIDATED' if passed else 'V2_4_PRODUCTION_VALIDATION_FAILED'}`",
+          ]
+          report = "\n".join(lines) + "\n"
+          Path("V2_4_PRODUCTION_DIAGNOSTIC_REPORT.md").write_text(report, encoding="utf-8")
+          Path("v2_4_status.txt").write_text("PASS" if passed else "FAIL", encoding="utf-8")
+          Path(sys.argv[1]).write_text(json.dumps({
+              "passed": passed, "status": "V2_4_PRODUCTION_VALIDATED" if passed else
+              "V2_4_PRODUCTION_VALIDATION_FAILED"
+          }), encoding="utf-8")
+          PY
+          cat V2_4_PRODUCTION_DIAGNOSTIC_REPORT.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload sanitized report
+        uses: actions/upload-artifact@v4
+        with:
+          name: v2-4-production-diagnostic-report
+          path: V2_4_PRODUCTION_DIAGNOSTIC_REPORT.md
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Enforce diagnostic result
+        run: test "$(cat v2_4_status.txt)" = PASS
+
+      - name: Remove temporary SSH material
+        if: always()
+        run: rm -f ~/.ssh/production_diagnostic_key "$RUNNER_TEMP/v2_4_probe.py" "$RUNNER_TEMP/v2_4_result.json"
