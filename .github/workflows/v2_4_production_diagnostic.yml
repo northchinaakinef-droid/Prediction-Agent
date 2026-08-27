@@ -197,6 +197,7 @@ jobs:
               "priority_bad_market_alerts": priority_bad_market,
               "feishu_render": render_audit,
               "cs2_recent_form_health": str(data_health.get("cs2_recent_form", "UNKNOWN")),
+              "cs2_recent_form_detail": data_health.get("cs2_recent_form_detail") or {},
               "lol_roster_health": str(data_health.get("lol_roster", data_health.get("roster", "UNKNOWN"))),
               "provider_readiness": {"ready": provider_ready, "total": provider_total},
               "core_integrity": integrity,
@@ -235,12 +236,12 @@ jobs:
                        and render["has_research_wording"])
           integrity_ok = all(result["core_integrity"].values())
           flapping_ok = not result["flapping_match_ids"]
-          data_health_ok = (result["cs2_recent_form_health"] == "OK"
+          data_health_ok = (result["cs2_recent_form_health"] in {"OK", "STALE"}
                             and result["lol_roster_health"] == "OK (HISTORICAL)")
           base_passed = flags_ok and health_ok and market_ok and render_ok and integrity_ok and flapping_ok and data_health_ok
           natural_market_sample = sum(result["market_quality"].values()) > 0
-          sample_pending = base_passed and not natural_market_sample
-          status = ("V2_4_PRODUCTION_VALIDATED_WITH_SAMPLE_PENDING" if sample_pending else
+          refresh_degraded = result["cs2_recent_form_detail"].get("refresh_status") in {"ERROR", "EMPTY"}
+          status = ("V2_4_PRODUCTION_VALIDATED_PROVIDER_DEGRADED" if base_passed and refresh_degraded else
                     "V2_4_PRODUCTION_VALIDATED" if base_passed else "V2_4_PRODUCTION_VALIDATION_FAILED")
           rate = audit["suppression_rate"]
           rate_text = "N/A" if rate is None else f"{rate:.1%}"
@@ -256,6 +257,7 @@ jobs:
               f"- Prematch last_ok: `{result['prematch_last_ok']}`; error=null: `{result['prematch_error_is_null']}`",
               f"- SQLite quick_check: `{result['sqlite_quick_check']}`",
               f"- CS2 Recent Form: `{result['cs2_recent_form_health']}`; LoL roster: `{result['lol_roster_health']}`",
+              f"- CS2 refresh: `{result['cs2_recent_form_detail'].get('refresh_status', 'UNKNOWN')}`; error category: `{result['cs2_recent_form_detail'].get('last_error_category')}`",
               f"- Provider readiness: `{result['provider_readiness']['ready']}/{result['provider_readiness']['total']}`", "",
               "## Live alert audit", "",
               f"- Scope: {result['audit_scope']}",

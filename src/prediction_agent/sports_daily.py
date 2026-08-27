@@ -24,7 +24,8 @@ from .risk import RiskBudgetLedger, RiskConfig, binary_share_math, kelly_fractio
 from .entities import canonical_team, normalized_name
 from .betting_gate import bet_status, can_place_real_bet, should_place_virtual_bet
 from .context import (load_recent_form, lol_roster_health, player_display_names,
-                      recent_form_artifact_generated_at, recent_form_for)
+                      recent_form_artifact_generated_at, recent_form_artifact_health,
+                      recent_form_for)
 from .paper_store import (
     calc_roi, count_settled_virtual_bets, count_virtual_bets, current_drawdown,
     record_virtual_bet, virtual_account_balance,
@@ -1082,19 +1083,23 @@ def run_all(model_dir: str | Path, output: str | Path, *, now: datetime | None =
             statuses[sport]["days_since_training"] = age
     recent_form_health = load_recent_form()
     cs2_form = recent_form_health.get("cs2") or {}
+    cs2_health = recent_form_artifact_health()
     cs2_model_teams = int(statuses.get("cs2", {}).get("model_team_count") or 0)
-    recent_artifact = Path("artifacts/recent_form.json")
     roster_health = lol_roster_health()
     data_health = {
         "lol_recent_form": "OK" if recent_form_health.get("lol") else "ERROR",
-        "cs2_recent_form": "OK" if cs2_form else "ERROR",
+        "cs2_recent_form": cs2_health["artifact_status"],
         "cs2_recent_form_detail": {
-            "status": "OK" if cs2_form else "ERROR", "team_count": len(cs2_form),
+            "status": cs2_health["artifact_status"], "artifact_status": cs2_health["artifact_status"],
+            "refresh_status": cs2_health["refresh_status"], "team_count": len(cs2_form),
+            "record_count": cs2_health["record_count"], "coverage": cs2_health["coverage"],
+            "last_attempt": cs2_health["last_attempt"], "last_success": cs2_health["last_success"],
+            "last_error_category": cs2_health["last_error_category"], "provider": cs2_health["provider"],
             "latest_match_at": max((str(value.get("latest_match_at")) for value in cs2_form.values()
                                     if value.get("latest_match_at")), default=None),
             "coverage_ratio": (len(cs2_form) / cs2_model_teams) if cs2_model_teams else 0.0,
-            "artifact_generated_at": datetime.fromtimestamp(recent_artifact.stat().st_mtime, timezone.utc).isoformat()
-                                     if recent_artifact.exists() else None,
+            "artifact_generated_at": cs2_health["generated_at"],
+            "artifact_age_seconds": cs2_health["age_seconds"],
             "alert": None if cs2_form else "DATA_SOURCE_FAILURE",
         },
         "lol_roster": roster_health["status"],

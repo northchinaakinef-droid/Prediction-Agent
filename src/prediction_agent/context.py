@@ -41,6 +41,57 @@ def recent_form_artifact_generated_at() -> str | None:
     return datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).isoformat() if path.exists() else None
 
 
+def recent_form_artifact_health(max_age_seconds: int = 72 * 3600) -> dict[str, Any]:
+    """Report frozen artifact health independently from the latest refresh.
+
+    A provider outage may degrade refresh availability, but it must not turn a
+    still-usable last-known-good artifact into an application ERROR.
+    """
+    path = ARTIFACT_DIR / "recent_form.json"
+    status_path = ARTIFACT_DIR / "recent_form_refresh_status.json"
+    result: dict[str, Any] = {
+        "artifact_status": "ERROR", "generated_at": None, "age_seconds": None,
+        "record_count": 0, "team_count": 0, "coverage": 0.0,
+        "latest_match_time": None, "refresh_status": "UNKNOWN",
+        "last_attempt": None, "last_success": None,
+        "last_error_category": None, "provider": None,
+    }
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        cs2 = payload.get("cs2") if isinstance(payload, dict) else None
+        metadata = (payload.get("_metadata") or {}).get("cs2") or {}
+        if not isinstance(cs2, dict) or not cs2:
+            return result
+        generated_text = metadata.get("generated_at") or (payload.get("_metadata") or {}).get("generated_at")
+        generated = (datetime.fromisoformat(str(generated_text).replace("Z", "+00:00"))
+                     if generated_text else datetime.fromtimestamp(path.stat().st_mtime, timezone.utc))
+        generated = generated.replace(tzinfo=generated.tzinfo or timezone.utc)
+        age = max(0, int((datetime.now(timezone.utc) - generated).total_seconds()))
+        result.update({
+            "artifact_status": "STALE" if age > max_age_seconds else "OK",
+            "generated_at": generated.isoformat(), "age_seconds": age,
+            "record_count": int(metadata.get("record_count") or 0),
+            "team_count": len(cs2), "coverage": metadata.get("coverage"),
+            "latest_match_time": metadata.get("latest_match_time"),
+            "provider": metadata.get("provider"),
+        })
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        return result
+    if status_path.exists():
+        try:
+            refresh = json.loads(status_path.read_text(encoding="utf-8"))
+            result.update({
+                "refresh_status": str(refresh.get("status") or "UNKNOWN"),
+                "last_attempt": refresh.get("attempted_at"),
+                "last_success": refresh.get("last_success"),
+                "last_error_category": refresh.get("error_category"),
+                "provider": refresh.get("provider") or result["provider"],
+            })
+        except (OSError, json.JSONDecodeError, TypeError):
+            result.update({"refresh_status": "ERROR", "last_error_category": "STATUS_INVALID"})
+    return result
+
+
 def lol_roster_health() -> dict[str, Any]:
     """Describe the frozen roster sidecar without promoting it to Evidence.
 

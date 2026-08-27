@@ -54,6 +54,8 @@ jobs:
             --exclude='.env' \
             --exclude='data' \
             --exclude='reports/daily.json' \
+            --exclude='artifacts/recent_form.json' \
+            --exclude='artifacts/recent_form_refresh_status.json' \
             --exclude='.pytest_cache' \
             --exclude='__pycache__' \
             -czf /tmp/prediction-agent-release.tgz .

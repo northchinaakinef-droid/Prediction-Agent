@@ -32,7 +32,7 @@ fail() {
 [[ -f "$archive" ]] || fail "release archive not found: $archive"
 [[ -f "$app_dir/.env" ]] || fail "production .env missing: $app_dir/.env"
 
-if tar -tzf "$archive" | grep -Eq '(^|/)\.env$|(^|/)data/|(^|/)reports/daily\.json$'; then
+if tar -tzf "$archive" | grep -Eq '(^|/)\.env$|(^|/)data/|(^|/)reports/daily\.json$|(^|/)artifacts/recent_form(_refresh_status)?\.json$'; then
   fail "release archive contains protected runtime state"
 fi
 
@@ -40,6 +40,10 @@ install -d -m 700 -o ubuntu -g ubuntu "$backup_dir"
 cp -a "$app_dir/.env" "$backup_dir/.env"
 chmod 600 "$backup_dir/.env"
 tar -C "$app_dir" --exclude=.env --exclude=data --exclude=reports -czf "$backup_dir/code.tgz" .
+install -d -m 700 "$backup_dir/runtime-artifacts"
+for artifact in recent_form.json recent_form_refresh_status.json; do
+  [[ ! -f "$app_dir/artifacts/$artifact" ]] || cp -a "$app_dir/artifacts/$artifact" "$backup_dir/runtime-artifacts/$artifact"
+done
 if [[ -f "$app_dir/compose.yaml" ]]; then
   cd "$app_dir"
   current_container="$(docker compose ps -q prediction-agent 2>/dev/null || true)"
