@@ -72,6 +72,15 @@ jobs:
                       result['historical_roster_teams'] = len(rosters)
                       result['complete_historical_rosters'] = sum(len(row or []) == 5 for row in rosters.values())
                       result['trained_through'] = model.get('trained_through')
+                  if name == 'lol_roster.json':
+                      result['top_level_keys'] = sorted(str(key) for key in value.keys())[:30]
+                      result['status'] = value.get('status')
+                      result['generated_at'] = value.get('generated_at')
+                      result['source_latest_match_at'] = value.get('source_latest_match_at') or value.get('latest_match_at')
+                      result['confidence'] = value.get('confidence')
+                      records = value.get('teams') or value.get('rosters') or value.get('data') or {}
+                      result['team_count'] = len(records) if isinstance(records, (dict, list)) else 0
+                      result['confirmed_count'] = int(value.get('confirmed_count') or 0)
               except Exception:
                   result['schema'] = 'INVALID_JSON'
               return result
@@ -121,7 +130,19 @@ jobs:
           for kind in ("timers","services"):
               text=subprocess.run(["systemctl","list-units","--all","--type="+kind[:-1],"--no-legend","--no-pager"],capture_output=True,text=True).stdout
               units += [line.split()[0] for line in text.splitlines() if any(term in line.casefold() for term in ("prediction","sidecar","recent","context"))]
-          print(json.dumps({"mounts":mounts,"related_units":sorted(set(units))},sort_keys=True))
+          unit_status={}
+          for unit in sorted(set(units)):
+              props=subprocess.run(["systemctl","show",unit,"--no-pager",
+                  "--property=ActiveState,SubState,Result,ExecMainStatus,ExecMainCode,InactiveExitTimestamp,ActiveEnterTimestamp,LastTriggerUSec,NextElapseUSecRealtime"],capture_output=True,text=True).stdout
+              unit_status[unit]={key:value for key,value in (line.split("=",1) for line in props.splitlines() if "=" in line)}
+              journal=subprocess.run(["journalctl","-u",unit,"-n","80","--no-pager","-o","cat"],capture_output=True,text=True).stdout.casefold()
+              unit_status[unit]["journal_classification"]={
+                  "request_error": any(term in journal for term in ("http error","request error","connection error","timeout")),
+                  "parse_error": any(term in journal for term in ("parse error","jsondecode","schema")),
+                  "permission_error": "permission denied" in journal,
+                  "zero_rows": any(term in journal for term in ("zero teams","zero rows","no cs2","empty")),
+              }
+          print(json.dumps({"mounts":mounts,"related_units":sorted(set(units)),"unit_status":unit_status},sort_keys=True))
           PY' > "$RUNNER_TEMP/host.json"
           python -m json.tool "$RUNNER_TEMP/container.json" >/dev/null
           python -m json.tool "$RUNNER_TEMP/host.json" >/dev/null
@@ -177,6 +198,7 @@ jobs:
               f"- Reported LoL roster health: `{container['reported_lol_roster_health']}`",
               f"- Container mounts: `{host['mounts']}`",
               f"- Related systemd units: `{host['related_units']}`",
+              f"- Sanitized systemd status: `{host['unit_status']}`",
           ]
           Path('V2_4_PRODUCTION_REMEDIATION_INSPECTION.md').write_text('\n'.join(lines)+'\n',encoding='utf-8')
           PY
