@@ -23,7 +23,8 @@ from .providers.live_data import (
 from .risk import RiskBudgetLedger, RiskConfig, binary_share_math, kelly_fraction, paper_recommend, recommend
 from .entities import canonical_team, normalized_name
 from .betting_gate import bet_status, can_place_real_bet, should_place_virtual_bet
-from .context import load_recent_form, player_display_names, recent_form_artifact_generated_at, recent_form_for
+from .context import (load_recent_form, lol_roster_health, player_display_names,
+                      recent_form_artifact_generated_at, recent_form_for)
 from .paper_store import (
     calc_roi, count_settled_virtual_bets, count_virtual_bets, current_drawdown,
     record_virtual_bet, virtual_account_balance,
@@ -1083,6 +1084,7 @@ def run_all(model_dir: str | Path, output: str | Path, *, now: datetime | None =
     cs2_form = recent_form_health.get("cs2") or {}
     cs2_model_teams = int(statuses.get("cs2", {}).get("model_team_count") or 0)
     recent_artifact = Path("artifacts/recent_form.json")
+    roster_health = lol_roster_health()
     data_health = {
         "lol_recent_form": "OK" if recent_form_health.get("lol") else "ERROR",
         "cs2_recent_form": "OK" if cs2_form else "ERROR",
@@ -1095,6 +1097,8 @@ def run_all(model_dir: str | Path, output: str | Path, *, now: datetime | None =
                                      if recent_artifact.exists() else None,
             "alert": None if cs2_form else "DATA_SOURCE_FAILURE",
         },
+        "lol_roster": roster_health["status"],
+        "lol_roster_detail": roster_health,
     }
     flagged = flag_rows(recommendations, flag_threshold)
     if ledger.breaker_reason:

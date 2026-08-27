@@ -38,6 +38,37 @@ def recent_form_artifact_generated_at() -> str | None:
     return datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).isoformat() if path.exists() else None
 
 
+def lol_roster_health() -> dict[str, Any]:
+    """Describe the frozen roster sidecar without promoting it to Evidence.
+
+    The sidecar is historical research context.  Its presence must never imply
+    a confirmed lineup, even when a provider labels a roster REGISTERED.
+    """
+    path = ARTIFACT_DIR / "lol_roster.json"
+    if not path.exists():
+        return {"status": "UNKNOWN", "confidence": "HISTORICAL", "team_count": 0,
+                "confirmed_count": 0, "artifact_generated_at": None,
+                "source_latest_match_at": None, "error": "ARTIFACT_MISSING"}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {"status": "ERROR", "confidence": "HISTORICAL", "team_count": 0,
+                "confirmed_count": 0, "artifact_generated_at": None,
+                "source_latest_match_at": None, "error": "INVALID_ARTIFACT"}
+    teams = payload.get("teams") if isinstance(payload, dict) else None
+    metadata = payload.get("_metadata") or {} if isinstance(payload, dict) else {}
+    team_count = len(teams) if isinstance(teams, dict) else 0
+    generated = metadata.get("generated_at") or datetime.fromtimestamp(
+        path.stat().st_mtime, timezone.utc).isoformat()
+    latest = metadata.get("source_latest_match_at") or metadata.get("latest_match_at")
+    return {
+        "status": "OK (HISTORICAL)" if team_count else "ERROR",
+        "confidence": "HISTORICAL", "team_count": team_count, "confirmed_count": 0,
+        "artifact_generated_at": generated, "source_latest_match_at": latest,
+        "error": None if team_count else "EMPTY_ARTIFACT",
+    }
+
+
 def player_display_names(sport: str, roster: tuple[str, ...] | list[str]) -> list[str]:
     """Return human-readable roster names for the push template."""
     if not roster:

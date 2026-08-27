@@ -1,5 +1,8 @@
 from datetime import datetime, timedelta, timezone
+import json
 import os
+from pathlib import Path
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -7,9 +10,23 @@ from prediction_agent.sports_daily import (
     _find_schedule_match, _is_major_cs2_event, _is_major_lol_event,
     _probability_sanity, _research_row, _scheduled_market_events,
 )
+from prediction_agent import context
 
 
 class SportsDailyTests(unittest.TestCase):
+    def test_lol_roster_health_is_historical_and_never_confirmed(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "lol_roster.json"
+            path.write_text(json.dumps({
+                "_metadata": {"generated_at": "2026-08-26T00:00:00+00:00"},
+                "teams": {"T1": {"status": "REGISTERED", "players": ["a", "b", "c", "d", "e"]}},
+            }), encoding="utf-8")
+            with patch.object(context, "ARTIFACT_DIR", Path(temp)):
+                health = context.lol_roster_health()
+        self.assertEqual(health["status"], "OK (HISTORICAL)")
+        self.assertEqual(health["confidence"], "HISTORICAL")
+        self.assertEqual(health["confirmed_count"], 0)
+
     def test_cs2_major_event_filter(self):
         self.assertTrue(_is_major_cs2_event("IEM Katowice 2026"))
         self.assertTrue(_is_major_cs2_event("BLAST Premier World Final"))
