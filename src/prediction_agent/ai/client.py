@@ -11,12 +11,15 @@ T = TypeVar("T")
 
 
 class LLMClient(Protocol):
+    provider: str
+    model: str
     def analyze(self, system_prompt: str, user_prompt: str, schema: type[T]) -> T: ...
 
 
 class OpenAICompatibleClient:
-    def __init__(self, *, api_key: str, model: str, base_url: str):
+    def __init__(self, *, api_key: str, model: str, base_url: str, provider: str = "openai"):
         self.api_key, self.model = api_key, model
+        self.provider = provider
         self.base_url = base_url.rstrip("/")
 
     @classmethod
@@ -27,7 +30,7 @@ class OpenAICompatibleClient:
         provider = os.getenv("LLM_PROVIDER", "openai").casefold()
         default_base = "https://api.deepseek.com" if provider == "deepseek" else "https://api.openai.com/v1"
         return cls(api_key=key, model=os.getenv("LLM_MODEL", "gpt-5-mini"),
-                   base_url=os.getenv("LLM_BASE_URL", default_base))
+                   base_url=os.getenv("LLM_BASE_URL", default_base), provider=provider)
 
     def analyze(self, system_prompt: str, user_prompt: str, schema: type[T]) -> T:
         endpoint = f"{self.base_url}/chat/completions"
@@ -49,6 +52,7 @@ class OpenAICompatibleClient:
 class AnthropicClient:
     def __init__(self, *, api_key: str, model: str, base_url: str = "https://api.anthropic.com/v1"):
         self.api_key, self.model, self.base_url = api_key, model, base_url.rstrip("/")
+        self.provider = "anthropic"
 
     def analyze(self, system_prompt: str, user_prompt: str, schema: type[T]) -> T:
         payload = {

@@ -384,11 +384,42 @@ def format_daily_report(report: dict[str, Any], report_date: date | None = None)
         models = health.get("models") or {}
         data = health.get("data") or {}
         notifications = health.get("notifications") or {}
+        llm = health.get("llm") or {}
+        llm_identity = "/".join(str(value) for value in (llm.get("provider"), llm.get("model")) if value)
+        llm_detail = (f"{llm.get('status', 'UNKNOWN')}"
+                      + (f" ({llm_identity})" if llm_identity else "")
+                      + f" 调用 {int(llm.get('attempted') or 0)} 成功 {int(llm.get('success') or 0)}"
+                      + f" Fallback {int(llm.get('fallback') or 0)} Cache Hit {int(llm.get('cache_hits') or 0)}")
         lines.append(
             "【系统健康】模型 " + "/".join(f"{key.upper()} {value}" for key, value in models.items())
             + f"｜CS2近期状态 {data.get('cs2_recent_form', 'UNKNOWN')}"
             + f"｜通知待发 {int(notifications.get('PENDING') or 0)} 失败 {int(notifications.get('FAILED') or 0)}"
-            + f"｜LLM {(health.get('llm') or {}).get('status', 'UNKNOWN')}"
+            + f"｜LLM {llm_detail}"
+        )
+        lines.append(
+            "【LLM审计】"
+            f"模式 {llm.get('mode', 'SHADOW')}｜Eligible {int(llm.get('eligible_matches') or 0)}｜"
+            f"请求 {int(llm.get('attempted') or 0)}｜成功 {int(llm.get('success') or 0)}｜"
+            f"Cache {int(llm.get('cache_hits') or 0)}｜Evidence Gate {int(llm.get('evidence_gate_fallback') or 0)}｜"
+            f"验证失败 {int(llm.get('validation_failures') or 0)}｜请求失败 {int(llm.get('request_failures') or 0)}"
+        )
+        lines.append(
+            f"【LLM调整】均值 {float(llm.get('average_adjustment') or 0):+.2%}｜"
+            f"正 {int(llm.get('positive_adjustments') or 0)}｜"
+            f"负 {int(llm.get('negative_adjustments') or 0)}｜"
+            f"零 {int(llm.get('zero_adjustments') or 0)}"
+        )
+    attribution = ((report.get("llm_attribution") or {}).get("overall") or {})
+    if int(attribution.get("samples") or 0):
+        lines.append(
+            f"【LLM结算审计】样本 {int(attribution['samples'])}｜"
+            f"Quant Brier {float(attribution['quant_brier']):.4f}｜Final Brier {float(attribution['final_brier']):.4f}｜"
+            f"Δ {float(attribution['brier_delta']):+.4f}"
+        )
+        lines.append(
+            f"【LLM结算审计】Quant LogLoss {float(attribution['quant_log_loss']):.4f}｜"
+            f"Final LogLoss {float(attribution['final_log_loss']):.4f}｜"
+            f"Δ {float(attribution['log_loss_delta']):+.4f}"
         )
     audit = report.get("live_monitor_audit") or {}
     if audit:
