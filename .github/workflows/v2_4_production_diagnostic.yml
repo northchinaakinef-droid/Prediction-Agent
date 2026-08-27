@@ -207,7 +207,7 @@ jobs:
           PROD_USER: ${{ secrets.PROD_USER }}
         run: |
           ssh -i ~/.ssh/production_diagnostic_key -o BatchMode=yes "$PROD_USER@$PROD_HOST" \
-            'cd /opt/prediction-agent && container=$(docker compose ps -q prediction-agent) && health=$(docker inspect "$container" --format "{{.State.Health.Status}}") && docker compose exec -T -e PYTHONDONTWRITEBYTECODE=1 -e DIAG_CONTAINER_HEALTH="$health" prediction-agent python -' \
+            'cd /opt/prediction-agent && container=$(sudo docker compose ps -q prediction-agent) && health=$(sudo docker inspect "$container" --format "{{.State.Health.Status}}") && sudo docker compose exec -T -e PYTHONDONTWRITEBYTECODE=1 -e DIAG_CONTAINER_HEALTH="$health" prediction-agent python -' \
             < "$RUNNER_TEMP/v2_4_probe.py" > "$RUNNER_TEMP/v2_4_result.json"
           python -m json.tool "$RUNNER_TEMP/v2_4_result.json" > /dev/null
 
